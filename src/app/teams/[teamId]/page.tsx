@@ -315,23 +315,23 @@ export default async function TeamDashboardPage({
     </p>
   </Link>
 
-  <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+  <Link href={`/teams/${teamId}/schedule`} className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500">
     <h3 className="text-lg font-semibold">
       Schedule
     </h3>
     <p className="mt-2 text-sm text-slate-400">
       Review upcoming team training.
     </p>
-  </div>
+  </Link>
 
-  <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+  <Link href={`/teams/${teamId}/adherence`} className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500">
     <h3 className="text-lg font-semibold">
       Adherence
     </h3>
     <p className="mt-2 text-sm text-slate-400">
       Track athlete completion and progress.
     </p>
-  </div>
+  </Link>
 </div>
          
         </section>
