@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
@@ -44,6 +44,7 @@ export default function WorkoutPlayer({
   const [saveError, setSaveError] = useState("");
 
   const startedAtRef = useRef<Date | null>(null);
+  const savingRef = useRef(false);
 
   const currentStep = steps[currentStepIndex];
 
@@ -62,53 +63,7 @@ export default function WorkoutPlayer({
     0
   );
 
-  useEffect(() => {
-    if (
-      phase === "ready" ||
-      phase === "finished" ||
-      isPaused ||
-      timeRemaining <= 0
-    ) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      setTimeRemaining((previous) => Math.max(previous - 1, 0));
-    }, 1000);
-
-    return () => window.clearInterval(timer);
-  }, [phase, isPaused, timeRemaining]);
-
-  useEffect(() => {
-    if (timeRemaining !== 0) {
-      return;
-    }
-
-    if (phase === "work") {
-      if (currentStep.restSeconds > 0) {
-        setPhase("rest");
-        setTimeRemaining(currentStep.restSeconds);
-      } else {
-        moveToNextStep();
-      }
-    } else if (phase === "rest") {
-      moveToNextStep();
-    }
-  }, [timeRemaining, phase]);
-
-  function startWorkout() {
-    if (!currentStep) return;
-
-    startedAtRef.current = new Date();
-
-    setCurrentStepIndex(0);
-    setPhase("work");
-    setIsPaused(false);
-    setSaveError("");
-    setTimeRemaining(steps[0].durationSeconds);
-  }
-
-  function moveToNextStep() {
+  const moveToNextStep = useCallback(() => {
     const nextIndex = currentStepIndex + 1;
 
     if (nextIndex >= steps.length) {
@@ -122,6 +77,37 @@ export default function WorkoutPlayer({
     setPhase("work");
     setTimeRemaining(steps[nextIndex].durationSeconds);
     setIsPaused(false);
+  }, [currentStepIndex, steps]);
+
+  useEffect(() => {
+    if (phase === "ready" || phase === "finished" || isPaused || !currentStep) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      if (timeRemaining > 0) {
+        setTimeRemaining((previous) => Math.max(previous - 1, 0));
+      } else if (phase === "work" && currentStep.restSeconds > 0) {
+        setPhase("rest");
+        setTimeRemaining(currentStep.restSeconds);
+      } else {
+        moveToNextStep();
+      }
+    }, timeRemaining > 0 ? 1000 : 0);
+
+    return () => window.clearTimeout(timer);
+  }, [phase, isPaused, timeRemaining, currentStep, moveToNextStep]);
+
+  function startWorkout() {
+    if (!currentStep) return;
+
+    startedAtRef.current = new Date();
+
+    setCurrentStepIndex(0);
+    setPhase("work");
+    setIsPaused(false);
+    setSaveError("");
+    setTimeRemaining(steps[0].durationSeconds);
   }
 
   function skipPhase() {
@@ -142,6 +128,8 @@ export default function WorkoutPlayer({
   }
 
   async function finishWorkout() {
+    if (savingRef.current) return;
+    savingRef.current = true;
     setIsSaving(true);
     setSaveError("");
 
@@ -152,7 +140,32 @@ export default function WorkoutPlayer({
 
     if (userError || !user) {
       setSaveError("Unable to verify your login.");
+      savingRef.current = false;
       setIsSaving(false);
+      return;
+    }
+
+    const { data: session, error: sessionError } = await supabase
+      .from("training_sessions")
+      .select("athlete_user_id, status")
+      .eq("id", sessionId)
+      .single();
+    const { data: results, error: resultError } = await supabase
+      .from("workout_results")
+      .select("id")
+      .eq("training_session_id", sessionId)
+      .limit(1);
+
+    if (sessionError || !session || session.athlete_user_id !== user.id || resultError) {
+      setSaveError("Unable to verify permission to complete this workout.");
+      savingRef.current = false;
+      setIsSaving(false);
+      return;
+    }
+
+    if (session.status === "completed" || results?.length) {
+      router.push(`/training/${sessionId}`);
+      router.refresh();
       return;
     }
 
@@ -181,6 +194,7 @@ export default function WorkoutPlayer({
 
     if (error) {
       setSaveError(error.message);
+      savingRef.current = false;
       setIsSaving(false);
       return;
     }

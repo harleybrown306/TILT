@@ -183,7 +183,14 @@ export default async function HomePage() {
   const displayName =
     profile?.full_name || user.email || "TILT User";
 
-  const today = new Date().toISOString().slice(0, 10);
+  const dateParts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const datePart = (type: string) => dateParts.find((part) => part.type === type)?.value;
+  const today = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
 
   const todaysTraining = trainingSessions.filter(
     (session) =>
@@ -256,7 +263,7 @@ export default async function HomePage() {
 
         {athleteMemberships.length > 0 && (
           <>
-            <section className="mb-10">
+            <section id="athlete-training" className="mb-10">
               <div className="mb-4">
                 <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
                   Today
@@ -380,7 +387,7 @@ export default async function HomePage() {
                 return (
                   <Link
   key={membership.id}
-  href={`/teams/${membership.team_id}`}
+  href={membership.role === "athlete" ? "/#athlete-training" : `/teams/${membership.team_id}`}
   className="block rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800"
 >
   <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
@@ -393,7 +400,7 @@ export default async function HomePage() {
 
   <p className="mt-3 text-sm text-slate-400">
     {membership.role === "athlete"
-      ? "Athlete training dashboard"
+      ? "View your assigned training"
       : "Open team management dashboard"}
   </p>
 </Link>

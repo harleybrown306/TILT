@@ -91,6 +91,7 @@ export default async function TrainingSessionPage({
       scheduled_date,
       status,
       workout_id,
+      team_id,
       athlete_user_id,
       workouts (
         id,
@@ -103,12 +104,36 @@ export default async function TrainingSessionPage({
       )
     `)
     .eq("id", sessionId)
-    .eq("athlete_user_id", user.id)
     .single();
 
   if (sessionError || !session) {
     notFound();
   }
+
+  const isAssignedAthlete = session.athlete_user_id === user.id;
+
+  if (!isAssignedAthlete) {
+    const { data: membership, error: membershipError } = await supabase
+      .from("team_memberships")
+      .select("role")
+      .eq("team_id", session.team_id)
+      .eq("user_id", user.id)
+      .single();
+
+    if (membershipError || !membership ||
+        !["coach", "assistant_coach"].includes(membership.role)) {
+      notFound();
+    }
+  }
+
+  const { data: results, error: resultError } = await supabase
+    .from("workout_results")
+    .select("id")
+    .eq("training_session_id", session.id)
+    .limit(1);
+
+  // Fail closed: an unreadable result must not offer another completion.
+  const isCompleted = session.status === "completed" || Boolean(results?.length);
 
   const workout = getOne(session.workouts as Workout | Workout[] | null);
   const team = getOne(session.teams as Team | Team[] | null);
@@ -143,10 +168,10 @@ export default async function TrainingSessionPage({
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-4xl">
         <Link
-          href="/"
+          href={isAssignedAthlete ? "/" : `/teams/${session.team_id}/athletes/${session.athlete_user_id}`}
           className="text-sm font-medium text-emerald-400 hover:text-emerald-300"
         >
-          ← Back to dashboard
+          ← {isAssignedAthlete ? "Back to dashboard" : "Back to athlete history"}
         </Link>
 
         <header className="mt-8 border-b border-slate-800 pb-8">
@@ -263,6 +288,20 @@ export default async function TrainingSessionPage({
         </section>
 
         <div className="border-t border-slate-800 pt-8">
+  {isCompleted ? (
+    <div className="rounded-2xl border border-emerald-500/30 bg-slate-900 p-8">
+      <h2 className="text-2xl font-semibold text-emerald-400">Workout completed</h2>
+      <p className="mt-3 text-slate-300">This training session is complete.</p>
+      {!isAssignedAthlete && <p className="mt-3 text-slate-400">Read-only coach view.</p>}
+    </div>
+  ) : !isAssignedAthlete ? (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
+      <h2 className="text-2xl font-semibold">Read-only coach view</h2>
+      <p className="mt-3 text-slate-300">Review the assigned exercise sequence above. Only the assigned athlete can complete this workout.</p>
+    </div>
+  ) : resultError ? (
+    <p className="text-slate-300">Unable to verify workout completion. Please reload before starting.</p>
+  ) : (
   <WorkoutPlayer
   workoutName={workout?.name ?? "Assigned Workout"}
   sessionId={session.id}
@@ -277,6 +316,7 @@ export default async function TrainingSessionPage({
       notes: step.notes,
     }))}
   />
+  )}
 </div>
       </div>
     </main>
