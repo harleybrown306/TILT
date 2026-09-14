@@ -1,368 +1,294 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
 import SignOutButton from "@/components/sign-out-button";
+import {
+  activityBuckets,
+  athleteDashboardMetrics,
+  displayMinutes,
+  isCompleted,
+  type AthleteDashboardSession,
+} from "@/lib/athlete-dashboard";
+import { attendanceStatus, formatScheduledDate, localDate } from "@/lib/team-attendance";
+import { createClient } from "@/lib/supabase/server";
 
-type Team = {
-  id: string;
-  name: string;
-};
-
-type Workout = {
-  id: string;
-  name: string;
-};
-
+type Team = { id: string; name: string };
 type Membership = {
   id: string;
   role: "coach" | "assistant_coach" | "athlete";
   team_id: string;
   teams: Team | Team[] | null;
 };
-
-type TrainingSession = {
+type Related<T> = T | T[] | null;
+type Result = { completed_at: string };
+type Prescription = {
+  workout_name: string;
+  prescribed_work_ms: number;
+  prescribed_total_ms: number;
+};
+type SessionRow = {
   id: string;
+  team_id: string;
   scheduled_date: string;
   status: string;
-  team_id: string;
-  workout_id: string;
-  workouts: Workout | Workout[] | null;
-  teams: Team | Team[] | null;
+  teams: Related<Team>;
+  training_session_prescriptions: Related<Prescription>;
+  workout_results: Related<Result>;
 };
 
-function getOne<T>(value: T | T[] | null): T | null {
-  if (Array.isArray(value)) {
-    return value[0] ?? null;
-  }
-
-  return value;
+function one<T>(value: Related<T>): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value;
 }
 
-function formatDate(date: string) {
-  return new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(`${date}T12:00:00`));
+function sessionStatus(session: AthleteDashboardSession, today: string) {
+  return attendanceStatus(
+    {
+      scheduledDate: session.scheduledDate,
+      storedStatus: session.status,
+      completedAt: session.completedAt,
+    },
+    today
+  );
+}
+
+function StatusPill({ status }: { status: string }) {
+  const tone =
+    status === "completed"
+      ? "bg-emerald-500/15 text-emerald-300"
+      : status === "pending"
+        ? "bg-amber-500/15 text-amber-300"
+        : status === "upcoming"
+          ? "bg-sky-500/15 text-sky-300"
+          : "bg-slate-800 text-slate-300";
+
+  return (
+    <span className={`rounded-full px-3 py-1 text-xs font-semibold capitalize ${tone}`}>
+      {status}
+    </span>
+  );
 }
 
 function TrainingCard({
   session,
+  today,
+  recent = false,
 }: {
-  session: TrainingSession;
+  session: AthleteDashboardSession;
+  today: string;
+  recent?: boolean;
 }) {
-  const workout = getOne(session.workouts);
-  const team = getOne(session.teams);
-  const completed = session.status === "completed";
+  const status = sessionStatus(session, today);
+  const prescribedMinutes =
+    session.prescribedWorkMs === null ? null : displayMinutes(session.prescribedWorkMs);
 
   return (
     <div className="flex flex-col justify-between gap-5 rounded-2xl border border-slate-800 bg-slate-900 p-6 sm:flex-row sm:items-center">
       <div>
         <div className="flex flex-wrap items-center gap-3">
           <p className="text-sm font-semibold text-emerald-400">
-            {formatDate(session.scheduled_date)}
+            {formatScheduledDate(session.scheduledDate)}
           </p>
-
-          <span
-            className={`rounded-full px-3 py-1 text-xs font-medium capitalize ${
-              completed
-                ? "bg-emerald-500/10 text-emerald-400"
-                : "bg-slate-800 text-slate-300"
-            }`}
-          >
-            {session.status.replace("_", " ")}
-          </span>
+          <StatusPill status={status} />
         </div>
-
-        <h3 className="mt-3 text-xl font-semibold">
-          {workout?.name ?? "Assigned workout"}
-        </h3>
-
-        <p className="mt-1 text-sm text-slate-400">
-          {team?.name ?? "Team"}
-        </p>
+        <h3 className="mt-3 text-xl font-semibold">{session.workoutName}</h3>
+        <p className="mt-1 text-sm text-slate-400">{session.teamName}</p>
+        {recent && (
+          <p className="mt-2 text-sm text-slate-400">
+            {prescribedMinutes === null
+              ? "Prescribed minutes unavailable for this session."
+              : `${prescribedMinutes} prescribed work min`}
+            {session.completedAt
+              ? ` · Completed ${new Intl.DateTimeFormat("en-US", {
+                  timeZone: "America/Chicago",
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }).format(new Date(session.completedAt))}`
+              : ""}
+          </p>
+        )}
       </div>
-
       <Link
         href={`/training/${session.id}`}
         className={`rounded-lg px-5 py-3 text-center font-semibold transition ${
-          completed
+          isCompleted(session)
             ? "border border-slate-700 text-slate-200 hover:bg-slate-800"
             : "bg-emerald-500 text-slate-950 hover:bg-emerald-400"
         }`}
       >
-        {completed ? "View workout" : "Start workout"}
+        {isCompleted(session) ? "View workout" : "Start workout"}
       </Link>
+    </div>
+  );
+}
+
+function Metric({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+      <p className="text-sm text-slate-400">{label}</p>
+      <p className="mt-2 text-3xl font-bold">{value}</p>
+      {detail && <p className="mt-2 text-xs text-slate-500">{detail}</p>}
     </div>
   );
 }
 
 export default async function HomePage() {
   const supabase = await createClient();
-
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/login");
-  }
+  if (!user) redirect("/login");
 
   const [
     { data: profile },
     { data: memberships, error: membershipError },
-    { data: sessions, error: sessionError },
+    { data: rows, error: sessionError },
   ] = await Promise.all([
-    supabase
-      .from("profiles")
-      .select("full_name, platform_role")
-      .eq("id", user.id)
-      .single(),
-
+    supabase.from("profiles").select("full_name,platform_role").eq("id", user.id).single(),
     supabase
       .from("team_memberships")
-      .select(`
-        id,
-        role,
-        team_id,
-        teams (
-          id,
-          name
-        )
-      `)
+      .select("id,role,team_id,teams(id,name)")
       .eq("user_id", user.id),
-
     supabase
       .from("training_sessions")
-      .select(`
-        id,
-        scheduled_date,
-        status,
-        team_id,
-        workout_id,
-        workouts (
-          id,
-          name
-        ),
-        teams (
-          id,
-          name
-        )
-      `)
+      .select(
+        "id,team_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms),workout_results(completed_at)"
+      )
       .eq("athlete_user_id", user.id)
-      .order("scheduled_date", { ascending: true }),
+      .order("scheduled_date", { ascending: true })
+      .order("id", { ascending: true }),
   ]);
 
-  if (membershipError) {
-    console.error(
-      "Unable to load memberships:",
-      membershipError.message
-    );
-  }
-
-  if (sessionError) {
-    console.error(
-      "Unable to load training sessions:",
-      sessionError.message
-    );
-  }
+  if (membershipError) console.error("Unable to load memberships:", membershipError.message);
+  if (sessionError) console.error("Unable to load training sessions:", sessionError.message);
 
   const teamMemberships = (memberships ?? []) as Membership[];
-  const trainingSessions = (sessions ?? []) as TrainingSession[];
-
+  const athleteMemberships = teamMemberships.filter((membership) => membership.role === "athlete");
   const coachMemberships = teamMemberships.filter(
-    (membership) =>
-      membership.role === "coach" ||
-      membership.role === "assistant_coach"
+    (membership) => membership.role === "coach" || membership.role === "assistant_coach"
   );
+  const sessions: AthleteDashboardSession[] = ((rows ?? []) as SessionRow[]).map((row) => {
+    const team = one(row.teams);
+    const prescription = one(row.training_session_prescriptions);
+    const result = one(row.workout_results);
 
-  const athleteMemberships = teamMemberships.filter(
-    (membership) => membership.role === "athlete"
+    return {
+      id: row.id,
+      teamId: row.team_id,
+      teamName: team?.name ?? "Team",
+      scheduledDate: row.scheduled_date,
+      status: row.status,
+      workoutName: prescription?.workout_name ?? "Assigned workout",
+      completedAt: result?.completed_at ?? null,
+      prescribedWorkMs: prescription?.prescribed_work_ms ?? null,
+      prescribedTotalMs: prescription?.prescribed_total_ms ?? null,
+    };
+  });
+  const today = localDate(new Date());
+  const metrics = athleteDashboardMetrics(sessions, today);
+  const todayTraining = sessions.filter((session) => session.scheduledDate === today && !isCompleted(session));
+  const upcomingTraining = sessions.filter(
+    (session) => session.scheduledDate > today && !isCompleted(session)
   );
-
-  const displayName =
-    profile?.full_name || user.email || "TILT User";
-
-  const dateParts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Chicago",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const datePart = (type: string) => dateParts.find((part) => part.type === type)?.value;
-  const today = `${datePart("year")}-${datePart("month")}-${datePart("day")}`;
-
-  const todaysTraining = trainingSessions.filter(
-    (session) =>
-      session.scheduled_date === today &&
-      session.status !== "completed"
-  );
-
-  const upcomingTraining = trainingSessions.filter(
-    (session) =>
-      session.scheduled_date > today &&
-      session.status !== "completed"
-  );
-
-  const recentActivity = trainingSessions
-    .filter((session) => session.status === "completed")
-    .sort((a, b) =>
-      b.scheduled_date.localeCompare(a.scheduled_date)
-    )
+  const recentActivity = sessions
+    .filter((session) => isCompleted(session) && session.scheduledDate <= today)
+    .sort((first, second) => {
+      const firstDate = first.completedAt ?? first.scheduledDate;
+      const secondDate = second.completedAt ?? second.scheduledDate;
+      return secondDate.localeCompare(firstDate);
+    })
     .slice(0, 5);
+  const chart = activityBuckets(sessions, today);
+  const chartMax = Math.max(...chart.map((bucket) => bucket.workMs), 1);
+  const displayName = profile?.full_name || user.email || "TILT User";
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-6xl">
         <header className="mb-10 flex items-start justify-between gap-6">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-              TILT
-            </p>
-
-            <h1 className="mt-2 text-4xl font-bold">
-              Welcome, {displayName}
-            </h1>
-
-            <p className="mt-3 text-slate-400">
-              Your Time Interval Lacrosse Training dashboard.
-            </p>
+            <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">TILT</p>
+            <h1 className="mt-2 text-4xl font-bold">Welcome, {displayName}</h1>
+            <p className="mt-3 text-slate-400">Your Time Interval Lacrosse Training dashboard.</p>
           </div>
-
           <div className="flex flex-wrap items-center gap-4">
-            {profile?.platform_role === "admin" && <Link href="/admin" className="font-semibold text-emerald-400">Admin</Link>}
+            {profile?.platform_role === "admin" && (
+              <Link href="/admin" className="font-semibold text-emerald-400">Admin</Link>
+            )}
             <SignOutButton />
           </div>
         </header>
 
-        <section className="mb-10 grid gap-4 sm:grid-cols-3">
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">
-              Teams
-            </p>
-            <p className="mt-2 text-3xl font-bold">
-              {teamMemberships.length}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">
-              Coach roles
-            </p>
-            <p className="mt-2 text-3xl font-bold">
-              {coachMemberships.length}
-            </p>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">
-              Athlete roles
-            </p>
-            <p className="mt-2 text-3xl font-bold">
-              {athleteMemberships.length}
-            </p>
-          </div>
-        </section>
-
         {athleteMemberships.length > 0 && (
           <>
             <section id="athlete-training" className="mb-10">
-              <div className="mb-4">
-                <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-                  Today
-                </p>
-
-                <h2 className="mt-1 text-2xl font-semibold">
-                  Today&apos;s Training
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-400">
-                  What you need to complete today.
-                </p>
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Today</p>
+              <h2 className="mt-1 text-2xl font-semibold">Today&apos;s Training</h2>
+              <p className="mt-1 text-sm text-slate-400">What you need to complete today.</p>
+              <div className="mt-4 space-y-4">
+                {todayTraining.length ? todayTraining.map((session) => (
+                  <TrainingCard key={session.id} session={session} today={today} />
+                )) : (
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+                    <p className="font-medium">You&apos;re caught up for today.</p>
+                    <p className="mt-1 text-sm text-slate-400">No unfinished training is scheduled for today.</p>
+                  </div>
+                )}
               </div>
-
-              {todaysTraining.length === 0 ? (
-                <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-                  <p className="font-medium">
-                    You&apos;re caught up for today.
-                  </p>
-
-                  <p className="mt-1 text-sm text-slate-400">
-                    No unfinished training is scheduled for today.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {todaysTraining.map((session) => (
-                    <TrainingCard
-                      key={session.id}
-                      session={session}
-                    />
-                  ))}
-                </div>
-              )}
             </section>
 
             <section className="mb-10">
-              <div className="mb-4">
-                <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-                  Schedule
-                </p>
-
-                <h2 className="mt-1 text-2xl font-semibold">
-                  Upcoming Training
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-400">
-                  Training your coach has scheduled next.
-                </p>
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Time summary</p>
+              <h2 className="mt-1 text-2xl font-semibold">Your training time</h2>
+              <p className="mt-1 text-sm text-slate-400">Minutes are completed prescribed work, not measured physical activity.</p>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                <Metric label="Weekly Prescribed Minutes" value={displayMinutes(metrics.weeklyWorkMs)} detail="Rolling 7 local dates" />
+                <Metric label="Monthly Prescribed Minutes" value={displayMinutes(metrics.monthlyWorkMs)} detail="Current local calendar month" />
+                <Metric label="Completed Workouts" value={metrics.totalCompletedWorkouts} />
+                <Metric label="Training Days" value={metrics.trainingDays} detail="Distinct scheduled completion dates" />
+                <Metric label="Current Training Streak" value={`${metrics.currentStreak} days`} detail="Consecutive training days" />
               </div>
-
-              {upcomingTraining.length === 0 ? (
-                <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
-                  No upcoming workouts are currently scheduled.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {upcomingTraining.map((session) => (
-                    <TrainingCard
-                      key={session.id}
-                      session={session}
-                    />
-                  ))}
-                </div>
-              )}
             </section>
 
             <section className="mb-10">
-              <div className="mb-4">
-                <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-                  Progress
-                </p>
-
-                <h2 className="mt-1 text-2xl font-semibold">
-                  Recent Activity
-                </h2>
-
-                <p className="mt-1 text-sm text-slate-400">
-                  Workouts you&apos;ve completed recently.
-                </p>
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Activity trend</p>
+              <h2 className="mt-1 text-2xl font-semibold">Last 7 days</h2>
+              <p className="mt-1 text-sm text-slate-400">Completed prescribed work minutes by scheduled date.</p>
+              <div className="mt-4 grid grid-cols-7 gap-2 rounded-2xl border border-slate-800 bg-slate-900 p-5">
+                {chart.map((bucket) => {
+                  const minutes = displayMinutes(bucket.workMs);
+                  return (
+                    <div key={bucket.date} className="flex min-w-0 flex-col items-center gap-2">
+                      <span className="text-xs font-semibold text-slate-300">{minutes}</span>
+                      <div className="flex h-28 w-full items-end rounded bg-slate-800 p-1">
+                        <div className="w-full rounded bg-emerald-500" style={{ height: `${Math.max(bucket.workMs ? 8 : 0, (bucket.workMs / chartMax) * 100)}%` }} />
+                      </div>
+                      <span className="text-center text-xs text-slate-500">{formatScheduledDate(bucket.date).split(",")[0]}</span>
+                    </div>
+                  );
+                })}
               </div>
+            </section>
 
-              {recentActivity.length === 0 ? (
-                <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
-                  Completed workouts will appear here.
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {recentActivity.map((session) => (
-                    <TrainingCard
-                      key={session.id}
-                      session={session}
-                    />
-                  ))}
-                </div>
-              )}
+            <section className="mb-10">
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Schedule</p>
+              <h2 className="mt-1 text-2xl font-semibold">Upcoming Training</h2>
+              <div className="mt-4 space-y-4">
+                {upcomingTraining.length ? upcomingTraining.map((session) => (
+                  <TrainingCard key={session.id} session={session} today={today} />
+                )) : <p className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">No upcoming workouts are currently scheduled.</p>}
+              </div>
+            </section>
+
+            <section className="mb-10">
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Progress</p>
+              <h2 className="mt-1 text-2xl font-semibold">Recent Activity</h2>
+              <div className="mt-4 space-y-4">
+                {recentActivity.length ? recentActivity.map((session) => (
+                  <TrainingCard key={session.id} session={session} today={today} recent />
+                )) : <p className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">Completed workouts will appear here.</p>}
+              </div>
             </section>
           </>
         )}
@@ -370,50 +296,28 @@ export default async function HomePage() {
         <section>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="text-2xl font-semibold">
-                Your teams
-              </h2>
-
-              <p className="mt-1 text-sm text-slate-400">
-                Your experience depends on your role within each team.
-              </p>
+              <h2 className="text-2xl font-semibold">Your teams</h2>
+              <p className="mt-1 text-sm text-slate-400">Your experience depends on your role within each team.</p>
             </div>
             <Link href="/teams/new" className="rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950 hover:bg-emerald-400">Create Team</Link>
           </div>
-
           {teamMemberships.length === 0 ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
-              You are not currently a member of a team.
-            </div>
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">You are not currently a member of a team.</div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {teamMemberships.map((membership) => {
-                const team = getOne(membership.teams);
-
+                const team = one(membership.teams);
                 return (
-                  <Link
-  key={membership.id}
-  href={membership.role === "athlete" ? "/#athlete-training" : `/teams/${membership.team_id}`}
-  className="block rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800"
->
-  <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">
-    {membership.role.replace("_", " ")}
-  </p>
-
-  <h3 className="mt-2 text-xl font-semibold">
-    {team?.name ?? "Unnamed team"}
-  </h3>
-
-  <p className="mt-3 text-sm text-slate-400">
-    {membership.role === "athlete"
-      ? "View your assigned training"
-      : "Open team management dashboard"}
-  </p>
-</Link>
+                  <Link key={membership.id} href={membership.role === "athlete" ? "/#athlete-training" : `/teams/${membership.team_id}`} className="block rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800">
+                    <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">{membership.role.replace("_", " ")}</p>
+                    <h3 className="mt-2 text-xl font-semibold">{team?.name ?? "Unnamed team"}</h3>
+                    <p className="mt-3 text-sm text-slate-400">{membership.role === "athlete" ? "View your assigned training" : "Open team management dashboard"}</p>
+                  </Link>
                 );
               })}
             </div>
           )}
+          {coachMemberships.length === 0 && athleteMemberships.length === 0 && <p className="mt-4 text-sm text-slate-500">Join a team or create one to get started.</p>}
         </section>
       </div>
     </main>

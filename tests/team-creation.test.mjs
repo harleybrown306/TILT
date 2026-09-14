@@ -82,6 +82,17 @@ function setup(options = {}) {
     "next/navigation": { redirect: (path) => { throw Error(`REDIRECT:${path}`); }, notFound: () => { throw Error("404"); } },
     "next/link": { default: (props) => React.createElement("a", props) },
     "@/components/sign-out-button": { default: () => null },
+    "@/lib/team-attendance": {
+      localDate: () => "2026-09-14",
+      formatScheduledDate: (date) => date,
+      attendanceStatus: (session, today) => session.completedAt || session.storedStatus === "completed" ? "completed" : session.scheduledDate > today ? "upcoming" : "pending",
+    },
+    "@/lib/athlete-dashboard": {
+      isCompleted: (session) => session.status === "completed" || Boolean(session.completedAt),
+      displayMinutes: (milliseconds) => Math.round(milliseconds / 60000),
+      athleteDashboardMetrics: () => ({ weeklyWorkMs: 0, monthlyWorkMs: 0, totalCompletedWorkouts: 0, trainingDays: 0, currentStreak: 0 }),
+      activityBuckets: () => [],
+    },
   };
   const action = loadTs("src/app/teams/new/actions.ts", mocks).createTeam;
   return { action, mocks, tables, calls, invalidations };
