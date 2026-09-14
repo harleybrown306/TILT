@@ -61,6 +61,7 @@ function setup(options = {}) {
   };
   if (options.emptyRoster) tables.team_memberships = tables.team_memberships.slice(0, 1);
   if (options.emptyGroups) { tables.team_groups = []; tables.team_group_memberships = []; }
+  if (options.emptyGroupMembers) tables.team_group_memberships = [];
   if (options.emptyPlans) tables.training_plans = [];
   if (options.missingMembership) tables.team_memberships = tables.team_memberships.filter((row) => row.user_id !== coachId);
   const client = {
@@ -294,7 +295,7 @@ test("page does not render an assignment form after a recipient loading failure"
   assert.equal(findComponent(tree, Form), null);
 });
 
-function uiFixture({ groups = true, plans = true, state = idle, pending = false } = {}) {
+function uiFixture({ groups = true, plans = true, emptyGroupMembers = false, state = idle, pending = false } = {}) {
   const values = [];
   let cursor;
   const component = loadTs("src/app/teams/[teamId]/assign/assignment-form.tsx", {
@@ -315,8 +316,8 @@ function uiFixture({ groups = true, plans = true, state = idle, pending = false 
     teamId,
     plans: plans ? [{ id: planId, name: "Test plan", description: null }] : [],
     groups: groups ? [
-      { id: groupA, name: "Group A", athleteIds: [athleteA, athleteB] },
-      { id: groupB, name: "Group B", athleteIds: [athleteB, athleteC] },
+      { id: groupA, name: "Group A", athleteIds: emptyGroupMembers ? [] : [athleteA, athleteB] },
+      { id: groupB, name: "Group B", athleteIds: emptyGroupMembers ? [] : [athleteB, athleteC] },
     ] : [],
     athletes: [athleteA, athleteB, athleteC].map((id, index) => ({ id, name: `Athlete ${index + 1}` })),
     defaultStartDate: "2026-09-14",
@@ -374,4 +375,43 @@ test("pending and review-required forms cannot submit; success replaces the form
   const success = uiFixture({ state: { status: "success", message: "Training assigned to 3 athletes." } }).render();
   assert.equal(findNode(success, (node) => node.type === "form"), null);
   assert.ok(renderToStaticMarkup(success).includes("Training assigned to 3 athletes."));
+});
+
+test("draft-only team and empty group reproduce the live page without offering a plan", async () => {
+  const fixture = setup({ planStatus: "draft", emptyGroupMembers: true });
+  const Form = () => null;
+  const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
+    ...fixture.mocks,
+    "./assignment-form": { default: Form },
+    "next/link": { default: () => null },
+    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
+  }).default;
+  const tree = await page({ params: Promise.resolve({ teamId }) });
+  const formNode = findComponent(tree, Form);
+  assert.equal(formNode.props.plans.length, 0);
+  assert.equal(formNode.props.groups[0].athleteIds.length, 0);
+  assert.equal(formNode.props.athletes.length, 3);
+  assert.equal(writes(fixture).length, 0);
+});
+
+test("empty group plus individual counts one but explains the missing active plan at submit", () => {
+  const fixture = uiFixture({ plans: false, emptyGroupMembers: true });
+  for (const value of [groupA, athleteA]) {
+    findNode(fixture.render(), (node) => node.type === "input" && node.props.value === value).props.onChange();
+  }
+  const tree = fixture.render();
+  const markup = renderToStaticMarkup(tree);
+  assert.ok(markup.includes("1 unique"));
+  assert.ok(markup.includes("no active training plan"));
+  assert.ok(markup.includes("Draft and archived plans cannot be assigned"));
+  assert.equal(findNode(tree, (node) => node.type === "button").props.disabled, true);
+  assert.equal(findNode(tree, (node) => node.type === "select"), null);
+  assert.ok(!markup.includes("Included through a selected group"));
+});
+
+test("action validation errors remain visible in the form", () => {
+  const state = { status: "error", message: "This training plan is not available for this team." };
+  const tree = uiFixture({ state }).render();
+  const alert = findNode(tree, (node) => node.props.role === "alert");
+  assert.equal(alert.props.children, state.message);
 });

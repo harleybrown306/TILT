@@ -105,6 +105,9 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
           {recipients.length > 0 ? <ul className="mt-4 flex flex-wrap gap-2" aria-label="Selected recipients">
             {recipients.map((athlete) => <li key={athlete.id} className="rounded-full bg-slate-800 px-3 py-1 text-sm">{athlete.name}</li>)}
           </ul> : <p className="mt-4 text-slate-400">Select athletes or a group containing athletes to continue.</p>}
+          {!plans.length && <p role="status" className="mt-4 text-sm text-amber-300">
+            Assignment is unavailable because this team has no active training plan. Draft and archived plans cannot be assigned.
+          </p>}
           <button type="submit" disabled={!planId || !recipients.length || pending || state.status === "review_required"} className="mt-6 rounded-xl bg-emerald-500 px-6 py-3 font-bold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">
             {pending ? "Assigning training…" : "Assign Training"}
           </button>
