@@ -35,10 +35,11 @@ function form(operation, fields = {}) {
 function setup(options = {}) {
   const calls = [], invalidations = [];
   const tables = {
+    profiles: [{ id: coachId, platform_role: options.platformRole ?? "user" }],
     team_memberships: [{ team_id: teamId, user_id: coachId, role: options.role ?? "coach" }],
     training_plans: [{ id: planId, team_id: null, kind: options.kind ?? "coach", visibility: options.visibility ?? "private", source_template_id: null, archived_at: options.archivedAt ?? null, owner_user_id: options.owner ?? coachId, name: "Test plan", description: "Description", status: options.status ?? "draft", created_at: version, updated_at: version }],
     training_plan_items: options.empty ? [] : [{ id: itemId, training_plan_id: planId, workout_id: workoutId, day_offset: 0, position: 0, scheduled_time: null, notes: null, updated_at: version }],
-    workouts: options.inaccessible ? [] : [{ id: workoutId, name: "Workout", description: "Practice", difficulty: "beginner", visibility: "team", team_id: teamId, owner_user_id: coachId, requires_entitlement: options.gated ? "premium_workouts" : null }],
+    workouts: options.inaccessible ? [] : [{ id: workoutId, name: "Workout", description: "Practice", difficulty: "beginner", visibility: options.publicWorkouts ? "public" : "team", team_id: teamId, owner_user_id: coachId, requires_entitlement: options.gated ? "premium_workouts" : null }],
     user_entitlements: options.entitled ? [{ id: id(30), user_id: coachId, plan_id: id(31), status: "active", starts_at: "2020-01-01T00:00:00Z", ends_at: options.expired ? "2020-02-01T00:00:00Z" : null }] : [],
     entitlement_plan_features: [{ id: id(32), plan_id: id(31), feature_key: "premium_workouts", enabled: !options.featureDisabled }],
   };
@@ -98,7 +99,14 @@ function setup(options = {}) {
     "next/cache": { revalidatePath: (path) => invalidations.push(path) },
     "next/navigation": { redirect: (path) => { throw Error(`REDIRECT:${path}`); } },
   });
-  return { tables, calls, invalidations, actions, server, mocks };
+  const adminServer = loadTs("src/lib/admin-training-templates-server.ts", mocks);
+  mocks["@/lib/admin-training-templates-server"] = adminServer;
+  const adminActions = loadTs("src/app/admin/training-templates/actions.ts", {
+    ...mocks,
+    "next/cache": { revalidatePath: (path) => invalidations.push(path) },
+    "next/navigation": { redirect: (path) => { throw Error(`REDIRECT:${path}`); } },
+  });
+  return { tables, calls, invalidations, actions, server, mocks, adminServer, adminActions };
 }
 const writes = (fixture) => fixture.calls.filter((call) => call.operation !== "read");
 
@@ -350,7 +358,7 @@ test("library workout eligibility includes all coached teams, excluding athlete-
 });
 
 function templateFixture(options = {}) {
-  const fixture = setup({ kind: "template", visibility: "public", owner: id(99), ...options });
+  const fixture = setup({ kind: "template", visibility: "public", status: "active", owner: id(99), ...options });
   fixture.tables.training_plan_items.push(...Array.from({ length: 4 }, (_, index) => ({
     ...fixture.tables.training_plan_items[0], id: id(70 + index), position: index + 1, day_offset: index + 1, scheduled_time: "10:30:00", notes: `Item ${index}`,
   })));
@@ -423,6 +431,10 @@ async function renderBuilder(fixture) {
 }
 for (const status of ["draft", "active", "archived"]) {
   test(`${status} master template renders only Use Template, never coach mutation/assignment controls`, async () => {
+    if (status !== "active") {
+      await assert.rejects(renderBuilder(templateFixture({ status })), /404/);
+      return;
+    }
     const markup = await renderBuilder(templateFixture({ status }));
     assert.ok(markup.includes("Use Template"));
     for (const forbidden of ["Activate Plan", "Archive Plan", "Restore Plan", "save-plan", `/teams/${teamId}/assign`]) assert.ok(!markup.includes(forbidden));
@@ -448,7 +460,7 @@ test("library separates My Plans, public templates and own archived plans across
   const base = fixture.tables.training_plans[0];
   fixture.tables.training_plans.push(
     { ...base, id: id(80), name: "Other coach plan", owner_user_id: id(99) },
-    { ...base, id: id(81), name: "Public master", kind: "template", visibility: "public", owner_user_id: id(99) },
+    { ...base, id: id(81), name: "Public master", kind: "template", status: "active", visibility: "public", owner_user_id: id(99) },
     { ...base, id: id(82), name: "Own archived", status: "archived", archived_at: new Date(Date.now() - 4 * DAY).toISOString() },
     { ...base, id: id(83), name: "Private master", kind: "template" },
   );
@@ -477,4 +489,151 @@ test("copy failure form shows review link/error and disables repeat submission",
   assert.equal(find(tree, "button").props.disabled, true);
   assert.equal(find(tree, "p").props.role, "alert");
   assert.ok(renderToStaticMarkup(tree).includes(`href="${state.recoveryUrl}"`));
+});
+
+function adminFixture(options = {}) {
+  return setup({ platformRole: "admin", kind: "template", visibility: "public", publicWorkouts: true, ...options });
+}
+for (const role of ["coach", "assistant_coach", "athlete"]) {
+  test(`${role} team role cannot grant admin route access or template mutations`, async () => {
+    const fixture = adminFixture({ platformRole: "user", role });
+    await assert.rejects(fixture.adminServer.requirePlatformAdmin(), /Platform admin/);
+    assert.equal((await fixture.adminActions.createTemplate(idle, form("create"))).status, "error");
+    assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("save-plan"))).status, "error");
+    assert.equal(writes(fixture).length, 0);
+    const nav = { redirect: () => { throw Error("denied"); }, notFound: () => { throw Error("404"); } };
+    for (const path of ["src/app/admin/page.tsx", "src/app/admin/training-templates/page.tsx", "src/app/admin/training-templates/new/page.tsx", "src/app/admin/training-templates/[templateId]/page.tsx"]) {
+      const page = loadTs(path, {
+        ...fixture.mocks, "next/navigation": nav, "next/link": { default: () => null },
+        "../actions": fixture.adminActions,
+        "@/components/plans/action-form": { default: () => null },
+        "@/components/plans/schedule-fields": { default: () => null, planInputClass: "input" },
+      }).default;
+      await assert.rejects(page({ params: Promise.resolve({ templateId: planId }) }), /denied/);
+    }
+  });
+}
+test("signed-out and missing-profile admin access fails closed", async () => {
+  const fixture = adminFixture({ signedOut: true });
+  await assert.rejects(fixture.adminServer.requirePlatformAdmin(), /sign in/);
+  const missing = adminFixture(); missing.tables.profiles = [];
+  await assert.rejects(missing.adminServer.requirePlatformAdmin(), /Platform admin/);
+});
+test("admin creation derives master identity from profile-auth context, not client or team role", async () => {
+  const fixture = adminFixture({ role: "athlete" });
+  await assert.rejects(fixture.adminActions.createTemplate(idle, form("create", { owner_user_id: id(99), team_id: teamId, kind: "coach", status: "active", source_template_id: id(99) })), /REDIRECT:\/admin\/training-templates/);
+  const payload = writes(fixture)[0].payload;
+  assert.equal(payload.kind, "template"); assert.equal(payload.visibility, "public"); assert.equal(payload.status, "draft");
+  assert.equal(payload.team_id, null); assert.equal(payload.owner_user_id, coachId); assert.equal(payload.source_template_id, null);
+});
+for (const [label, options, operation, fields] of [
+  ["coach plan target", { kind: "coach", visibility: "private" }, "save-plan", {}],
+  ["stale version", {}, "save-plan", { planVersion: "old" }],
+  ["empty publish", { empty: true }, "publish", {}],
+  ["unavailable public workout", { inaccessible: true }, "publish", {}],
+  ["nonpublic workout", { publicWorkouts: false }, "publish", {}],
+  ["stale schedule", {}, "publish", { scheduleVersion: "old" }],
+  ["foreign item", {}, "remove-item", { itemId: id(99) }],
+  ["stale item", {}, "save-item", { itemVersion: "old" }],
+  ["invalid day", {}, "save-item", { dayNumber: "0" }],
+  ["duplicate order", {}, "add-item", {}],
+  ["unknown operation", {}, "delete-template", {}],
+]) {
+  test(`admin rejects ${label} without writes`, async () => {
+    const fixture = adminFixture(options);
+    assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form(operation, fields))).status, "error"); assert.equal(writes(fixture).length, 0);
+  });
+}
+for (const status of ["active", "archived"]) {
+  for (const operation of ["save-plan", "add-item", "save-item", "remove-item"]) {
+    test(`admin ${status} master is read-only for ${operation}`, async () => {
+      const fixture = adminFixture({ status });
+      assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form(operation))).status, "error"); assert.equal(writes(fixture).length, 0);
+    });
+  }
+}
+test("admin configures draft with existing human-day scheduling helpers", async () => {
+  const fixture = adminFixture();
+  assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("save-plan"))).status, "success");
+  const nextVersion = fixture.tables.training_plans[0].updated_at;
+  assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("add-item", { planVersion: nextVersion, dayNumber: "7", orderNumber: "2" }))).status, "success");
+  const item = writes(fixture).at(-1).payload;
+  assert.equal(item.day_offset, 6); assert.equal(item.position, 1); assert.equal(item.scheduled_time, "09:30"); assert.equal(item.notes, "Notes");
+  assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("remove-item", { planVersion: nextVersion }))).status, "success");
+  assert.equal(fixture.tables.training_plan_items.length, 1);
+});
+for (const [operation, start, expected] of [["publish", "draft", "active"], ["unpublish", "active", "draft"], ["archive", "active", "archived"], ["edit-archived", "archived", "draft"]]) {
+  test(`admin lifecycle ${operation} changes only master status to ${expected}`, async () => {
+    const fixture = adminFixture({ status: start, gated: true });
+    const items = structuredClone(fixture.tables.training_plan_items);
+    assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form(operation))).status, "success");
+    assert.equal(fixture.tables.training_plans[0].status, expected); assert.deepEqual(writes(fixture)[0].payload, { status: expected });
+    assert.deepEqual(fixture.tables.training_plan_items, items);
+    assert.ok(!fixture.calls.some((call) => ["training_plan_assignments", "training_sessions", "workout_results"].includes(call.table)));
+  });
+}
+for (const status of ["draft", "archived"]) {
+  test(`${status} masters cannot be viewed or copied by coach, even via direct ID`, async () => {
+    const fixture = templateFixture({ status });
+    await assert.rejects(fixture.server.requireReadablePlan(await fixture.server.requirePlanCoach(teamId), planId), /unavailable/);
+    assert.equal((await fixture.actions.duplicateTemplate(teamId, planId, idle, form("copy"))).status, "error"); assert.equal(writes(fixture).length, 0);
+    assert.ok(!(await renderLibrary(fixture, "templates")).includes("Test plan"));
+  });
+}
+test("published master changes and archival never alter existing independent coach copy", async () => {
+  const fixture = adminFixture({ status: "active" });
+  await assert.rejects(fixture.actions.duplicateTemplate(teamId, planId, idle, form("copy")), /REDIRECT:/);
+  const copy = fixture.tables.training_plans[1];
+  const copyItems = structuredClone(fixture.tables.training_plan_items.filter((item) => item.training_plan_id === copy.id));
+  const originalCopy = structuredClone(copy);
+  assert.equal(copy.source_template_id, planId);
+  assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("unpublish"))).status, "success");
+  const current = fixture.tables.training_plans[0].updated_at;
+  assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("save-item", { planVersion: current, notes: "Master edited" }))).status, "success");
+  assert.deepEqual(fixture.tables.training_plan_items.filter((item) => item.training_plan_id === copy.id), copyItems);
+  assert.deepEqual(copy, originalCopy);
+});
+
+test("admin layout independently denies non-admin and renders for admin", async () => {
+  for (const platformRole of ["user", "admin"]) {
+    const fixture = adminFixture({ platformRole });
+    const layout = loadTs("src/app/admin/layout.tsx", {
+      ...fixture.mocks, "next/link": { default: () => null }, "next/navigation": { redirect: () => { throw Error("denied"); } },
+    }).default;
+    if (platformRole === "user") await assert.rejects(layout({ children: "Admin child" }), /denied/);
+    else assert.ok(renderToStaticMarkup(await layout({ children: "Admin child" })).includes("Admin child"));
+  }
+});
+test("admin list separates draft, published and archived masters with counts, excluding coach plans", async () => {
+  const fixture = adminFixture();
+  const base = fixture.tables.training_plans[0];
+  fixture.tables.training_plans.push({ ...base, id: id(90), name: "Published master", status: "active" }, { ...base, id: id(91), name: "Archived master", status: "archived" }, { ...base, id: id(92), name: "Private coach plan", kind: "coach", visibility: "private" });
+  const page = loadTs("src/app/admin/training-templates/page.tsx", { ...fixture.mocks, "next/link": { default: (props) => React.createElement("a", props) }, "next/navigation": { redirect: () => { throw Error("denied"); } } }).default;
+  const markup = renderToStaticMarkup(await page());
+  for (const label of ["Draft", "Published", "Archived", "1 scheduled workouts", "Published master", "Archived master"]) assert.ok(markup.includes(label));
+  assert.ok(!markup.includes("Private coach plan"));
+});
+for (const status of ["draft", "active", "archived"]) {
+  test(`admin detail shows ${status} lifecycle controls and draft schedule fields`, async () => {
+    const fixture = adminFixture({ status });
+    const Form = ({ label, children }) => React.createElement("form", null, children, React.createElement("button", null, label));
+    const Schedule = () => React.createElement("span", null, "Schedule inputs");
+    const page = loadTs("src/app/admin/training-templates/[templateId]/page.tsx", {
+      ...fixture.mocks, "../actions": fixture.adminActions, "@/components/plans/action-form": { default: Form }, "@/components/plans/schedule-fields": { default: Schedule, planInputClass: "input" },
+      "next/link": { default: (props) => React.createElement("a", props) }, "next/navigation": { redirect: () => { throw Error("denied"); }, notFound: () => { throw Error("404"); } },
+    }).default;
+    const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ templateId: planId }) }));
+    assert.equal(markup.includes("Schedule inputs"), status === "draft");
+    assert.equal(markup.includes("Publish Template"), status === "draft");
+    assert.equal(markup.includes("Unpublish / Edit"), status === "active");
+    assert.equal(markup.includes("Archive Template"), status === "active");
+    assert.equal(markup.includes("Return to Draft"), status === "archived");
+    assert.ok(!markup.includes("Assign Training") && !markup.includes("Use Template"));
+  });
+}
+test("admin mutation RLS rejection remains an error with no false success", async () => {
+  const fixture = adminFixture({ deniedWrite: true });
+  assert.equal((await fixture.adminActions.mutateTemplate(planId, idle, form("publish"))).status, "error");
+  assert.equal(fixture.tables.training_plans[0].status, "draft");
+  assert.equal(fixture.invalidations.length, 0);
 });

@@ -1,7 +1,7 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid, readAllRows } from "@/lib/training-assignment";
-import { isOwnedCoachPlan, isPublicTemplate, isWorkoutUsable, type Plan, type PlanItem, type PlanWorkout } from "@/lib/training-plans";
+import { isOwnedCoachPlan, isPublishedTemplate, isWorkoutUsable, type Plan, type PlanItem, type PlanWorkout } from "@/lib/training-plans";
 
 export const PLAN_COLUMNS = "id, team_id, owner_user_id, name, description, status, kind, visibility, source_template_id, archived_at, created_at, updated_at";
 
@@ -23,7 +23,7 @@ export async function requireReadablePlan(context: PlanContext, planId: string):
   if (!isUuid(planId)) throw new Error("Invalid training plan.");
   const { data, error } = await context.supabase.from("training_plans")
     .select(PLAN_COLUMNS).eq("id", planId).single();
-  if (error || !data || (!isOwnedCoachPlan(data, context.user.id) && !isPublicTemplate(data))) throw new Error("This training plan is unavailable in your library.");
+  if (error || !data || (!isOwnedCoachPlan(data, context.user.id) && !isPublishedTemplate(data))) throw new Error("This training plan is unavailable in your library.");
   return data as Plan;
 }
 

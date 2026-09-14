@@ -21,7 +21,7 @@ export default async function TrainingPlansPage({ params, searchParams }: {
   try {
     plans = await readAllRows<Plan>((from, to) => {
       const query = context.supabase.from("training_plans").select(PLAN_COLUMNS);
-      const scoped = view === "templates" ? query.eq("kind", "template").eq("visibility", "public")
+      const scoped = view === "templates" ? query.eq("kind", "template").eq("visibility", "public").eq("status", "active")
         : query.eq("kind", "coach").eq("visibility", "private").eq("owner_user_id", context.user.id);
       return scoped.order("created_at", { ascending: false }).order("id").range(from, to);
     });

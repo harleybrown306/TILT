@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { isUuid } from "@/lib/training-assignment";
-import { isDraft, isPublicTemplate, readSchedule, readText, restorationWindow, scheduleVersion, type PlanActionState } from "@/lib/training-plans";
+import { isDraft, isPublishedTemplate, readSchedule, readText, restorationWindow, scheduleVersion, type PlanActionState } from "@/lib/training-plans";
 import { loadPlanItems, loadPlanWorkouts, requirePlanCoach, requireCoachPlan, requireReadablePlan, withPlanLock } from "@/lib/training-plans-server";
 
 function failure(cause: unknown): PlanActionState {
@@ -126,7 +126,7 @@ export async function duplicateTemplate(teamId: string, templateId: string, stat
   try {
     const context = await requirePlanCoach(teamId);
     const template = await requireReadablePlan(context, templateId);
-    if (!isPublicTemplate(template)) throw new Error("Choose a readable public TILT template.");
+    if (!isPublishedTemplate(template)) throw new Error("Choose a published public TILT template.");
     const items = await loadPlanItems(context, templateId);
     const workouts = await loadPlanWorkouts(context);
     const usableIds = new Set(workouts.map((workout) => workout.id));

@@ -229,7 +229,10 @@ export default async function HomePage() {
             </p>
           </div>
 
-          <SignOutButton />
+          <div className="flex flex-wrap items-center gap-4">
+            {profile?.platform_role === "admin" && <Link href="/admin" className="font-semibold text-emerald-400">Admin</Link>}
+            <SignOutButton />
+          </div>
         </header>
 
         <section className="mb-10 grid gap-4 sm:grid-cols-3">

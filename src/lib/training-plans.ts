@@ -41,6 +41,9 @@ export function isOwnedCoachPlan(plan: Pick<Plan, "kind" | "visibility" | "owner
 export function isPublicTemplate(plan: Pick<Plan, "kind" | "visibility">) {
   return plan.kind === "template" && plan.visibility === "public";
 }
+export function isPublishedTemplate(plan: Pick<Plan, "kind" | "visibility" | "status">) {
+  return isPublicTemplate(plan) && plan.status === "active";
+}
 export function isAssignablePlan(plan: Pick<Plan, "kind" | "visibility" | "owner_user_id" | "status">, userId: string) {
   return isOwnedCoachPlan(plan, userId) && plan.status === "active";
 }
