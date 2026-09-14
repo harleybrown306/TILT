@@ -15,6 +15,7 @@ export type AttendanceSession = {
   storedStatus: string;
   workoutName: string;
   completedAt: string | null;
+  prescribedWorkMs: number | null;
 };
 
 export function localDate(date: Date, timeZone = TEAM_TIME_ZONE) {

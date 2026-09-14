@@ -7,7 +7,7 @@ type Related<T> = T | T[] | null;
 type Profile = { full_name: string | null };
 type Member = { user_id: string; profiles: Related<Profile> };
 type Result = { completed_at: string };
-type Snapshot = { workout_name: string };
+type Snapshot = { workout_name: string; prescribed_work_ms: number };
 type Workout = { name: string };
 type Session = {
   id: string;
@@ -63,7 +63,7 @@ export async function loadTeamAttendance(teamId: string) {
     supabase
       .from("training_sessions")
       .select(
-        "id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name),workout_results(completed_at)"
+        "id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms),workout_results(completed_at)"
       )
       .eq("team_id", teamId)
       .order("scheduled_date", { ascending: true })
@@ -95,6 +95,7 @@ export async function loadTeamAttendance(teamId: string) {
       storedStatus: session.status,
       workoutName: snapshot?.workout_name ?? workout?.name ?? "Assigned workout",
       completedAt: result?.completed_at ?? null,
+      prescribedWorkMs: snapshot?.prescribed_work_ms ?? null,
     };
   });
 

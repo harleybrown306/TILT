@@ -332,6 +332,10 @@ export default async function TeamDashboardPage({
       Track athlete completion and progress.
     </p>
   </Link>
+  <Link href={`/teams/${teamId}/analytics`} className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500">
+    <h3 className="text-lg font-semibold">Analytics</h3>
+    <p className="mt-2 text-sm text-slate-400">Review team training volume and attendance.</p>
+  </Link>
 </div>
          
         </section>
