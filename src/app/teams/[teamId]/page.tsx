@@ -280,6 +280,13 @@ export default async function TeamDashboardPage({
 
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
   <Link
+    href={`/teams/${teamId}/plans`}
+    className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800"
+  >
+    <h3 className="text-lg font-semibold">Training Plans</h3>
+    <p className="mt-2 text-sm text-slate-400">Build, activate, and archive reusable workout schedules.</p>
+  </Link>
+  <Link
     href={`/teams/${teamId}/groups`}
     className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800"
   >
