@@ -1,0 +1,124 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import vm from "node:vm";
+import test from "node:test";
+import ts from "typescript";
+import { indexedDB } from "fake-indexeddb";
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+const require = createRequire(import.meta.url);
+function load(path, mocks = {}) {
+ const code = ts.transpileModule(readFileSync(new URL("../"+path,import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
+ const loaded = {exports:{}}; new vm.Script(`(function(require,module,exports){${code}\n})`).runInThisContext()((name)=>name in mocks?mocks[name]:require(name),loaded,loaded.exports); return loaded.exports;
+}
+const state = load("src/lib/workout-session-state.ts");
+const events = load("src/lib/workout-session-events.ts");
+globalThis.indexedDB = indexedDB;
+const storage = load("src/lib/workout-session-storage.ts", {"./workout-session-state":state,"./workout-session-events":events});
+const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+let next=100; const uuid=()=>id(next++); const start=Date.parse("2026-09-14T12:00:00.000Z");
+const step=(changes={})=>({id:id(4),position:0,exerciseName:"Cradle",durationSeconds:10,restSeconds:5,offHand:false,notes:null,videoUrl:null,...changes});
+const input={userId:id(1),sessionId:id(2),workoutId:id(3),workoutName:"Test",steps:[step(),step({id:id(5),position:1,durationSeconds:20,restSeconds:0})]};
+const begin=(changes={})=>state.beginAttempt({...input,...changes},start,uuid);
+const command=(cp,c,ms,observed=true)=>state.changeAttempt(cp,c,start+ms,uuid,observed);
+for (const [name,ms,phase,index,remaining] of [
+ ["normal countdown",3000,"work",0,7000], ["work expires",10000,"rest",0,5000],
+ ["rest expires",15000,"work",1,20000], ["long delay",22000,"work",1,13000],
+ ["all deadlines missed",60000,"finished",1,0],
+]) test(name,()=>{const change=command(begin().checkpoint,"tick",ms);assert.equal(change.checkpoint.phase,phase);assert.equal(change.checkpoint.index,index);assert.equal(state.remainingMs(change.checkpoint,start+ms),remaining);});
+test("no rest advances directly",()=>{const cp=begin({steps:[step({restSeconds:0}),step({id:id(5)})]}).checkpoint;assert.equal(command(cp,"tick",10000).checkpoint.index,1);});
+test("timely expiration emits paired transitions",()=>{assert.deepEqual(command(begin().checkpoint,"tick",10000).events.map(e=>e.event_type),["exercise_completed","rest_started"]);});
+test("rest timely expiration emits completion then work start",()=>{const cp=command(begin().checkpoint,"tick",10000).checkpoint;assert.deepEqual(command(cp,"tick",15000).events.map(e=>e.event_type),["rest_completed","exercise_started"]);});
+test("late recovery emits no fabricated expiration events",()=>{const c=command(begin().checkpoint,"recover",22000);assert.equal(c.events.length,0);assert.equal(c.checkpoint.inferredTransitions,2);});
+test("long delay is bounded and emits no burst",()=>{const c=command(begin().checkpoint,"tick",86400000);assert.equal(c.events.length,0);assert.equal(c.checkpoint.phase,"finished");});
+test("repeated tick/recovery cannot duplicate transitions",()=>{const c=command(begin().checkpoint,"tick",10000);assert.equal(command(c.checkpoint,"tick",10000).events.length,0);assert.equal(command(c.checkpoint,"recover",10000).events.length,0);});
+test("explicit pause freezes even after long delay",()=>{const c=command(begin().checkpoint,"pause",3000);assert.equal(c.events[0].event_type,"timer_paused");assert.equal(state.remainingMs(command(c.checkpoint,"tick",60000).checkpoint,start+60000),7000);});
+test("resume keeps correct remaining and pause metrics",()=>{const cp=command(begin().checkpoint,"pause",3000).checkpoint;const c=command(cp,"resume",13000);assert.equal(c.events[0].event_type,"timer_resumed");assert.equal(state.remainingMs(c.checkpoint,start+13000),7000);assert.equal(c.checkpoint.totalPauseMs,10000);});
+test("duplicate explicit pause/resume are no-ops",()=>{let cp=command(begin().checkpoint,"pause",3000).checkpoint;assert.equal(command(cp,"pause",4000).events.length,0);cp=command(cp,"resume",5000).checkpoint;assert.equal(command(cp,"resume",6000).events.length,0);});
+test("skip work records timing and retains rest",()=>{const c=command(begin().checkpoint,"skip",3000);assert.deepEqual(c.events.map(e=>e.event_type),["exercise_skipped","rest_started"]);assert.equal(c.events[0].phase_elapsed_ms,3000);assert.equal(c.checkpoint.skippedSteps,1);assert.equal(c.checkpoint.workProgressMs,3000);});
+test("skipped work does not become completed",()=>{const c=command(begin().checkpoint,"skip",3000);assert.equal(command(c.checkpoint,"tick",8000).events.some(e=>e.event_type==="exercise_completed"),false);});
+test("rest skip advances once",()=>{const cp=command(begin().checkpoint,"skip",3000).checkpoint;const c=command(cp,"skip",4000);assert.deepEqual(c.events.map(e=>e.event_type),["rest_skipped","exercise_started"]);assert.equal(c.checkpoint.index,1);});
+test("skip at expiration does not skip newly entered phase",()=>{const c=command(begin().checkpoint,"skip",10000);assert.equal(c.checkpoint.phase,"rest");assert.equal(c.events.some(e=>e.event_type==="rest_skipped"),false);});
+test("start identity and sequence emitted once",()=>{const b=begin();assert.ok(b.checkpoint.attemptId);assert.deepEqual(b.events.map(e=>e.event_type),["workout_started","exercise_started"]);assert.deepEqual(b.events.map(e=>e.sequence),[0,1]);assert.equal(command(b.checkpoint,"recover",3000).checkpoint.attemptId,b.checkpoint.attemptId);});
+test("checkpoint recovery uses saved anchors",()=>{const cp=command(begin().checkpoint,"tick",3000).checkpoint;cp.savedWallAt=start+3000;const now=state.recoveryNow(cp,start+5000);assert.equal(state.remainingMs(command(cp,"recover",now-start).checkpoint,now),5000);});
+test("clock backwards/huge jumps cannot create negative elapsed",()=>{const cp=begin().checkpoint;assert.equal(state.recoveryNow(cp,start-100000),start);assert.equal(state.recoveryNow(cp,start+86400001),start);assert.equal(command(cp,"tick",-100).checkpoint.logicalNow,start);});
+test("pause remains paused after refresh",()=>{const cp=command(begin().checkpoint,"pause",3000).checkpoint;assert.equal(command(cp,"recover",30000).checkpoint.pausedAt,start+3000);});
+test("visibility context does not pause or change deadline",()=>{const cp=begin().checkpoint;const hidden=command(cp,"hidden",3000,false);assert.equal(hidden.events[0].event_type,"page_hidden");assert.equal(hidden.checkpoint.phaseStartedAt,cp.phaseStartedAt);assert.equal(hidden.checkpoint.pausedAt,null);const visible=command(hidden.checkpoint,"visible",13000,false);assert.equal(visible.checkpoint.phase,"rest");assert.equal(visible.events.at(-1).event_type,"page_visible");});
+test("finalization emits once then no visibility or recovery events",()=>{const c=command(begin().checkpoint,"finalize",35000);assert.equal(c.events.at(-1).event_type,"workout_completed");for(const name of ["hidden","visible","recover","finalize"]){assert.equal(command(c.checkpoint,name,40000).events.length,0);}});
+test("generated events conform to endpoint vocabulary/structure",()=>{let cp=begin().checkpoint;for(const [c,ms] of [["pause",1000],["resume",2000],["skip",3000],["hidden",4000],["visible",5000],["skip",6000],["finalize",30000]]){const result=command(cp,c,ms);events.parseEventBatch({events:result.events});cp=result.checkpoint;}});
+
+test("real IndexedDB checkpoint and events persist atomically before delivery",async()=>{const b=begin();await storage.mutateBundle(input.userId,bundle=>storage.saveChange(bundle,b,start));const loaded=await storage.mutateBundle(input.userId,()=>{});assert.equal(loaded.checkpoints[input.sessionId].attemptId,b.checkpoint.attemptId);assert.equal(loaded.outbox.length,2);});
+test("another user cannot load checkpoint/outbox",async()=>{const b=await storage.mutateBundle(id(900),()=>{});assert.equal(b.outbox.length,0);assert.equal(b.checkpoints[input.sessionId],undefined);});
+test("two serialized begins persist one attempt",async()=>{const userId=id(901);await Promise.all([1,2].map(()=>storage.mutateBundle(userId,bundle=>{if(!bundle.checkpoints[input.sessionId])storage.saveChange(bundle,begin({userId}),start);})));const b=await storage.mutateBundle(userId,()=>{});assert.equal(b.outbox.length,2);});
+test("outbox batch respects 25-event limit",()=>{const b={outbox:Array.from({length:30},(_,n)=>({event:begin().events[0],status:"pending",n}))};assert.equal(storage.eventBatch(b).length,25);});
+test("outbox capacity bounded, existing errors preserved",()=>{const b={checkpoints:{},outbox:Array(2500).fill({status:"conflict",event:begin().events[0]}),dropped:0};storage.saveChange(b,begin(),start);assert.equal(b.outbox.length,2500);assert.equal(b.dropped,2);});
+for(const status of ["accepted","duplicate","conflict","rejected","retry","unknown"])test("acknowledgement "+status,()=>{const e=begin().events[0];const b={outbox:[{event:e,status:"pending"}]};storage.acknowledge(b,[e],{acknowledgements:[{id:e.id,status}]});assert.equal(b.outbox.length,["accepted","duplicate"].includes(status)?0:1);if(["conflict","rejected"].includes(status))assert.equal(b.outbox[0].status,status);});
+test("malformed or foreign acknowledgements leave queue unchanged",()=>{const e=begin().events[0];const b={outbox:[{event:e,status:"pending"}]};for(const payload of [null,{}, {acknowledgements:[null,{id:id(999),status:"accepted"}]}])storage.acknowledge(b,[e],payload);assert.equal(b.outbox.length,1);});
+test("failed send retries exact UUID/payload then acknowledgement removes",async()=>{const userId=id(902);await storage.mutateBundle(userId,b=>storage.saveChange(b,begin({userId}),start));const originalFetch=globalThis.fetch;const bodies=[];try{globalThis.fetch=async(_url,opts)=>{bodies.push(opts.body);throw Error("offline");};await storage.flushEvents(userId,async()=>userId);await storage.flushEvents(userId,async()=>userId);assert.equal(bodies[0],bodies[1]);globalThis.fetch=async(_url,opts)=>new Response(JSON.stringify({acknowledgements:JSON.parse(opts.body).events.map(e=>({id:e.id,status:"accepted"}))}));await storage.flushEvents(userId,async()=>userId);assert.equal((await storage.mutateBundle(userId,()=>{})).outbox.length,0);}finally{globalThis.fetch=originalFetch;}});
+test("wrong signed-in account never transmits previous user's queue",async()=>{let called=false;const original=globalThis.fetch;try{globalThis.fetch=async()=>{called=true;};await storage.flushEvents(input.userId,async()=>id(999));assert.equal(called,false);}finally{globalThis.fetch=original;}});
+const video=load("src/components/workout/exercise-video.tsx");
+test("video is muted inline looping visual media",()=>{const html=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/demo.mp4"}));for(const flag of ["muted","loop","playsInline","autoPlay"])assert.ok(html.toLowerCase().includes(flag.toLowerCase()));});
+test("missing/unsafe video leaves workout unaffected",()=>{assert.equal(video.safeVideoUrl("javascript:alert(1)"),null);assert.equal(renderToStaticMarkup(React.createElement(video.default,{url:null})),"");});
+test("video component has no timer coupling or playback telemetry",()=>{const source=readFileSync(new URL("../src/components/workout/exercise-video.tsx",import.meta.url),"utf8");assert.doesNotMatch(source,/changeAttempt|run\(|flushEvents|workout-session-events/);});
+function findButton(tree, label) {
+ if(!tree||typeof tree!=="object")return null;
+ if(tree.type==="button" && tree.props.children===label)return tree;
+ const children=tree.props?.children;
+ for(const child of Array.isArray(children)?children:[children]) {const found=findButton(child,label);if(found)return found;}return null;
+}
+function completionSetup(options={}) {
+ const cp=command(begin().checkpoint,"recover",35000).checkpoint;const calls=[];let inserts=0;
+ const client={auth:{getUser:async()=>({data:{user:{id:options.wrongUser?id(999):input.userId}},error:null})},from(table){
+  let insert=false;const q={select(){return q;},eq(){return q;},single(){return q;},limit(){return q;},insert(payload){insert=true;calls.push({type:"result",payload});return q;},then(resolve){
+   if(table==="training_sessions")return Promise.resolve({data:{athlete_user_id:input.userId,status:options.completed?"completed":"scheduled"},error:null}).then(resolve);
+   if(insert){inserts++;return Promise.resolve({error:null}).then(resolve);}return Promise.resolve({data:options.completed?[{id:id(800)}]:[],error:null}).then(resolve);
+  }};return q;
+ }};
+ const fakeReact={...React,useMemo:fn=>fn(),useState:v=>[typeof v==="function"?v():v,()=>{}],useRef:v=>({current:v})};
+ const player=load("src/components/workout/workout-player.tsx",{
+  react:fakeReact,"next/navigation":{useRouter:()=>({push:path=>calls.push({type:"navigate",path}),refresh:()=>{}})},
+  "@/lib/supabase/client":{createClient:()=>client},"@/lib/workout-session-state":state,
+  "./use-workout-session":{useWorkoutSession:()=>({checkpoint:cp,ready:true,warning:"",run:async c=>{calls.push({type:c});if(options.telemetryFailure)throw Error("offline");},flush:async()=>{}})},
+  "./exercise-video":{default:()=>null,safeVideoUrl:url=>url},
+ });
+ const tree=player.default({...input,steps:input.steps});return {button:findButton(tree,"Finish workout"),calls,inserts:()=>inserts};
+}
+test("result INSERT precedes completion event and navigation",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await s.button.props.onClick();assert.deepEqual(s.calls.map(c=>c.type),["result","finalize","navigate"]);assert.equal(s.calls[0].payload.active_minutes,1);assert.equal(s.calls[0].payload.result_data.completed_steps,2);}finally{globalThis.window=oldWindow;}});
+test("telemetry failure cannot block legitimate result completion",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({telemetryFailure:true});await s.button.props.onClick();assert.equal(s.inserts(),1);assert.equal(s.calls.at(-1).type,"navigate");}finally{globalThis.window=oldWindow;}});
+test("existing canonical result avoids another INSERT",async()=>{const s=completionSetup({completed:true});await s.button.props.onClick();assert.equal(s.inserts(),0);assert.equal(s.calls.at(-1).type,"navigate");});
+test("wrong account cannot save the athlete result",async()=>{const s=completionSetup({wrongUser:true});await s.button.props.onClick();assert.equal(s.inserts(),0);assert.equal(s.calls.length,0);});
+test("concurrent Finish clicks produce one INSERT",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await Promise.all([s.button.props.onClick(),s.button.props.onClick()]);assert.equal(s.inserts(),1);}finally{globalThis.window=oldWindow;}});
+test("video source changes cleanly with exercise reference",()=>{const first=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/a.mp4"}));const second=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/b.mp4"}));assert.notEqual(first,second);assert.ok(second.includes("b.mp4"));});
+function pageSetup(options={}) {
+ const queries={training_sessions:{id:input.sessionId,workout_id:input.workoutId,athlete_user_id:input.userId,team_id:id(99),scheduled_date:"2026-09-14",status:options.completed?"completed":"scheduled",workouts:{id:input.workoutId,name:"Test"},teams:{id:id(99),name:"Team"}},workout_results:options.completed?[{id:id(100)}]:[],team_memberships:options.unauthorized?null:{role:"coach"},workout_exercises:[{id:id(4),position:0,duration_seconds:10,rest_seconds:5,off_hand:false,notes:null,exercises:{id:id(55),name:"Test",video_url:null}}]};let mounted=0;
+ const client={auth:{getUser:async()=>({data:{user:{id:options.coach?id(50):input.userId}}})},from(table){const q={select(){return q;},eq(){return q;},single(){return q;},limit(){return q;},order(){return q;},then(resolve){return Promise.resolve({data:queries[table],error:null}).then(resolve);}};return q;}};
+ const page=load("src/app/training/[sessionId]/page.tsx",{"@/lib/supabase/server":{createClient:async()=>client},"next/navigation":{notFound:()=>{throw Error("404");},redirect:()=>{throw Error("redirect");}},"next/link":{default:props=>React.createElement("a",props)},"@/components/workout/workout-player":{default:()=>{mounted++;return React.createElement("div",null,"Player");}},"@/components/workout/completed-workout-delivery":{default:()=>null}});
+ return {render:async()=>renderToStaticMarkup(await page.default({params:Promise.resolve({sessionId:input.sessionId})})),mounted:()=>mounted};
+}
+test("coach session stays read-only and never mounts player",async()=>{const p=pageSetup({coach:true});assert.ok((await p.render()).includes("Read-only coach view"));assert.equal(p.mounted(),0);});
+test("completed athlete session never mounts active player",async()=>{const p=pageSetup({completed:true});assert.ok((await p.render()).includes("Workout completed"));assert.equal(p.mounted(),0);});
+test("unrelated user cannot start another athlete's session",async()=>{const p=pageSetup({coach:true,unauthorized:true});await assert.rejects(p.render(),/404/);assert.equal(p.mounted(),0);});
+async function hookHarness() {
+ const userId=id(next++),sessionId=id(next++);const props={...input,userId,sessionId};
+ const values=[],effects=[],refs=[];let slot=0;const listeners=new Map();const docListeners=new Map();let authCallback;
+ const oldWindow=globalThis.window,oldDocument=globalThis.document,oldFetch=globalThis.fetch;
+ const requests=[];
+ globalThis.window={addEventListener:(n,fn)=>listeners.set(n,fn),removeEventListener:()=>{},setInterval:()=>0};
+ globalThis.document={visibilityState:"visible",addEventListener:(n,fn)=>docListeners.set(n,fn),removeEventListener:()=>{}};
+ globalThis.fetch=async(_url,options)=>{requests.push(JSON.parse(options.body));return new Response("{}",{status:503});};
+ const client={auth:{getUser:async()=>({data:{user:{id:userId}},error:null}),onAuthStateChange:fn=>{authCallback=fn;return {data:{subscription:{unsubscribe(){}}}};}}};
+ const fakeReact={useState:v=>{const i=slot++;values[i]=typeof v==="function"?v():v;return [values[i],next=>{values[i]=next;}];},useRef:v=>{const i=slot++;refs[i]={current:v};return refs[i];},useCallback:fn=>fn,useEffect:fn=>effects.push(fn)};
+ const hook=load("src/components/workout/use-workout-session.ts",{react:fakeReact,"@/lib/supabase/client":{createClient:()=>client},"@/lib/workout-session-state":state,"@/lib/workout-session-storage":storage});
+ const controller=hook.useWorkoutSession(props);const cleanups=effects.map(fn=>fn());
+ await new Promise(resolve=>setTimeout(resolve,5));
+ return {props,controller,read:()=>values[0],visibility:state=>{globalThis.document.visibilityState=state;docListeners.get("visibilitychange")();},auth:authCallback,requests,bundle:()=>storage.mutateBundle(userId,()=>{}),settle:()=>new Promise(resolve=>setTimeout(resolve,10)),close:()=>{cleanups.forEach(fn=>fn?.());globalThis.window=oldWindow;globalThis.document=oldDocument;globalThis.fetch=oldFetch;}};
+}
+test("visibility before Begin emits nothing",async()=>{const h=await hookHarness();try{h.visibility("hidden");await h.settle();assert.equal((await h.bundle()).outbox.length,0);}finally{h.close();}});
+test("listener deduplicates hidden/visible and keeps deadlines independent",async()=>{const h=await hookHarness();try{await h.controller.run("begin");const deadline=h.read().phaseStartedAt;h.visibility("hidden");h.visibility("hidden");await h.settle();h.visibility("visible");await h.settle();const all=(await h.bundle()).outbox.map(x=>x.event.event_type);assert.equal(all.filter(x=>x==="page_hidden").length,1);assert.equal(all.filter(x=>x==="page_visible").length,1);assert.equal(h.read().phaseStartedAt,deadline);assert.equal(h.read().pausedAt,null);}finally{h.close();}});
+test("listener ignores visibility after canonical finalization",async()=>{const h=await hookHarness();try{await h.controller.run("begin");await h.controller.run("finalize");h.visibility("hidden");await h.settle();assert.equal((await h.bundle()).outbox.some(x=>x.event.event_type==="page_hidden"),false);}finally{h.close();}});
+test("rapid stale skip clicks cannot skip two phases",async()=>{const h=await hookHarness();try{await h.controller.run("begin");const expected={index:0,phase:"work",paused:false};await Promise.all([h.controller.run("skip",expected),h.controller.run("skip",expected)]);assert.equal(h.read().phase,"rest");assert.equal((await h.bundle()).outbox.filter(x=>x.event.event_type==="exercise_skipped").length,1);}finally{h.close();}});
+test("account change stops old checkpoint mutations",async()=>{const h=await hookHarness();try{await h.controller.run("begin");const n=(await h.bundle()).outbox.length;h.auth("SIGNED_IN",{user:{id:id(999)}});await h.controller.run("pause");assert.equal((await h.bundle()).outbox.length,n);}finally{h.close();}});
+test("duplicate Begin recovers the stored prescription and attempt",async()=>{const h=await hookHarness();try{await h.controller.run("begin");const attempt=h.read().attemptId;h.props.steps=[step({durationSeconds:999})];await h.controller.run("begin");assert.equal(h.read().attemptId,attempt);assert.equal(h.read().steps[0].durationSeconds,10);assert.equal((await h.bundle()).outbox.filter(x=>x.event.event_type==="workout_started").length,1);}finally{h.close();}});
+test("attempt metrics keep prescription elapsed pause and work distinct",()=>{let cp=command(begin().checkpoint,"pause",3000).checkpoint;const m=state.attemptMetrics(cp,start+5000);assert.equal(m.prescribedMs,35000);assert.equal(m.elapsedMs,5000);assert.equal(m.explicitPauseMs,2000);assert.equal(m.workProgressMs,3000);cp=command(cp,"resume",5000).checkpoint;assert.equal(state.attemptMetrics(cp,start+6000).workProgressMs,4000);});
+test("checkpoint identity/version validation rejects foreign or corrupt state",()=>{const cp=begin().checkpoint;const bundle={checkpoints:{[input.sessionId]:cp}};assert.equal(storage.storedCheckpoint(bundle,input.userId,input.sessionId),cp);assert.throws(()=>storage.storedCheckpoint(bundle,id(999),input.sessionId));cp.version=999;assert.throws(()=>storage.storedCheckpoint(bundle,input.userId,input.sessionId));});

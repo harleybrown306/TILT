@@ -1,26 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-
-type WorkoutStep = {
-  id: string;
-  position: number;
-  exerciseName: string;
-  durationSeconds: number;
-  restSeconds: number;
-  offHand: boolean;
-  notes: string | null;
-};
+import { remainingMs, type WorkoutStep } from "@/lib/workout-session-state";
+import { useWorkoutSession } from "./use-workout-session";
+import ExerciseVideo, { safeVideoUrl } from "./exercise-video";
 
 type WorkoutPlayerProps = {
   workoutName: string;
   sessionId: string;
+  userId: string;
+  workoutId: string;
   steps: WorkoutStep[];
 };
-
-type Phase = "ready" | "work" | "rest" | "finished";
 
 function formatClock(seconds: number) {
   const minutes = Math.floor(seconds / 60);
@@ -29,180 +22,65 @@ function formatClock(seconds: number) {
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
-export default function WorkoutPlayer({
-  workoutName,
-  sessionId,
-  steps,
-}: WorkoutPlayerProps) {
+export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutId, steps: prescribedSteps }: WorkoutPlayerProps) {
   const router = useRouter();
-  const supabase = createClient();
-
-  const [currentStepIndex, setCurrentStepIndex] = useState(0);
-  const [phase, setPhase] = useState<Phase>("ready");
-  const [isPaused, setIsPaused] = useState(false);
+  const supabase = useMemo(() => createClient(), []);
+  const input = useMemo(() => ({ workoutName, sessionId, userId, workoutId, steps: prescribedSteps }), [workoutName, sessionId, userId, workoutId, prescribedSteps]);
+  const { checkpoint, ready, warning, run, flush } = useWorkoutSession(input);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
-
-  const startedAtRef = useRef<Date | null>(null);
   const savingRef = useRef(false);
-
+  const steps = checkpoint?.steps ?? prescribedSteps;
+  const phase = checkpoint?.phase ?? "ready";
+  const currentStepIndex = checkpoint?.index ?? 0;
   const currentStep = steps[currentStepIndex];
-
-  const [timeRemaining, setTimeRemaining] = useState(
-    currentStep?.durationSeconds ?? 0
-  );
-
-  const activeSeconds = steps.reduce(
-    (total, step) => total + step.durationSeconds,
-    0
-  );
-
-  const totalSeconds = steps.reduce(
-    (total, step) =>
-      total + step.durationSeconds + step.restSeconds,
-    0
-  );
-
-  const moveToNextStep = useCallback(() => {
-    const nextIndex = currentStepIndex + 1;
-
-    if (nextIndex >= steps.length) {
-      setPhase("finished");
-      setTimeRemaining(0);
-      setIsPaused(false);
-      return;
-    }
-
-    setCurrentStepIndex(nextIndex);
-    setPhase("work");
-    setTimeRemaining(steps[nextIndex].durationSeconds);
-    setIsPaused(false);
-  }, [currentStepIndex, steps]);
-
-  useEffect(() => {
-    if (phase === "ready" || phase === "finished" || isPaused || !currentStep) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      if (timeRemaining > 0) {
-        setTimeRemaining((previous) => Math.max(previous - 1, 0));
-      } else if (phase === "work" && currentStep.restSeconds > 0) {
-        setPhase("rest");
-        setTimeRemaining(currentStep.restSeconds);
-      } else {
-        moveToNextStep();
-      }
-    }, timeRemaining > 0 ? 1000 : 0);
-
-    return () => window.clearTimeout(timer);
-  }, [phase, isPaused, timeRemaining, currentStep, moveToNextStep]);
-
-  function startWorkout() {
-    if (!currentStep) return;
-
-    startedAtRef.current = new Date();
-
-    setCurrentStepIndex(0);
-    setPhase("work");
-    setIsPaused(false);
-    setSaveError("");
-    setTimeRemaining(steps[0].durationSeconds);
-  }
-
-  function skipPhase() {
-    if (phase === "work") {
-      if (currentStep.restSeconds > 0) {
-        setPhase("rest");
-        setTimeRemaining(currentStep.restSeconds);
-      } else {
-        moveToNextStep();
-      }
-
-      return;
-    }
-
-    if (phase === "rest") {
-      moveToNextStep();
-    }
-  }
+  const isPaused = checkpoint?.pausedAt != null;
+  const timeRemaining = checkpoint ? Math.ceil(remainingMs(checkpoint, checkpoint.logicalNow) / 1000) : 0;
+  const activeSeconds = steps.reduce((sum, step) => sum + step.durationSeconds, 0);
+  const totalSeconds = steps.reduce((sum, step) => sum + step.durationSeconds + step.restSeconds, 0);
+  const nextVideoUrl = safeVideoUrl(steps[currentStepIndex + 1]?.videoUrl);
+  const expected = { index: currentStepIndex, phase, paused: isPaused };
+  const storageWarning = warning ? <p role="status" className="mb-4 text-sm text-amber-300">{warning}</p> : null;
+  function startWorkout() { void run("begin"); }
+  function skipPhase() { void run("skip", expected); }
 
   async function finishWorkout() {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    setIsSaving(true);
-    setSaveError("");
-
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
-      setSaveError("Unable to verify your login.");
-      savingRef.current = false;
-      setIsSaving(false);
-      return;
-    }
-
-    const { data: session, error: sessionError } = await supabase
-      .from("training_sessions")
-      .select("athlete_user_id, status")
-      .eq("id", sessionId)
-      .single();
-    const { data: results, error: resultError } = await supabase
-      .from("workout_results")
-      .select("id")
-      .eq("training_session_id", sessionId)
-      .limit(1);
-
-    if (sessionError || !session || session.athlete_user_id !== user.id || resultError) {
-      setSaveError("Unable to verify permission to complete this workout.");
-      savingRef.current = false;
-      setIsSaving(false);
-      return;
-    }
-
-    if (session.status === "completed" || results?.length) {
-      router.push(`/training/${sessionId}`);
-      router.refresh();
-      return;
-    }
-
-    const startedAt =
-      startedAtRef.current?.toISOString() ??
-      new Date().toISOString();
-
-    const activeMinutes = Math.ceil(activeSeconds / 60);
-    const totalDurationMinutes = Math.ceil(totalSeconds / 60);
-
-    const { error } = await supabase
-      .from("workout_results")
-      .insert({
-        training_session_id: sessionId,
-        athlete_user_id: user.id,
-        started_at: startedAt,
-        completed_at: new Date().toISOString(),
-        active_minutes: activeMinutes,
-        total_duration_minutes: totalDurationMinutes,
+    if (savingRef.current || !checkpoint || checkpoint.finalized) return;
+    savingRef.current = true; setIsSaving(true); setSaveError("");
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user || user.id !== userId) throw new Error("Unable to verify your athlete login.");
+      const { data: session, error: sessionError } = await supabase.from("training_sessions")
+        .select("athlete_user_id, status").eq("id", sessionId).single();
+      const { data: results, error: resultError } = await supabase.from("workout_results")
+        .select("id").eq("training_session_id", sessionId).limit(1);
+      if (sessionError || !session || session.athlete_user_id !== user.id || resultError) throw new Error("Unable to verify permission to complete this workout.");
+      if (session.status === "completed" || results?.length) {
+        if (results?.length) await run("finalize").catch(() => {});
+        router.push(`/training/${sessionId}`); router.refresh(); return;
+      }
+      // Preserve legacy prescribed result fields; accurate attempt timing stays
+      // separate until a reviewed result/time-metric migration.
+      const { error } = await supabase.from("workout_results").insert({
+        training_session_id: sessionId, athlete_user_id: user.id,
+        started_at: new Date(checkpoint.startedAt).toISOString(), completed_at: new Date().toISOString(),
+        active_minutes: Math.ceil(activeSeconds / 60), total_duration_minutes: Math.ceil(totalSeconds / 60),
         exercises_completed: steps.length,
-        result_data: {
-          workout_name: workoutName,
-          completed_steps: steps.length,
-        },
+        result_data: { workout_name: checkpoint.workoutName, completed_steps: steps.length },
       });
-
-    if (error) {
-      setSaveError(error.message);
-      savingRef.current = false;
-      setIsSaving(false);
-      return;
-    }
-
-    router.push("/");
-    router.refresh();
+      if (error) {
+        // Unique-result races and uncertain retries are resolved by canonical state.
+        const { data: saved } = await supabase.from("workout_results").select("id").eq("training_session_id", sessionId).limit(1);
+        if (!saved?.length) throw new Error("Unable to save workout. Retry to check whether it was saved.");
+      }
+      // Result is committed first. Telemetry/recovery failure cannot undo it.
+      await Promise.race([run("finalize").catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, 2000))]);
+      void flush(); router.push(`/training/${sessionId}`); router.refresh();
+    } catch (error) { setSaveError(error instanceof Error ? error.message : "Unable to save workout. Retry safely."); }
+    finally { savingRef.current = false; setIsSaving(false); }
   }
 
+  if (!ready) return <p className="text-slate-400">Loading workout recovery...</p>;
   if (steps.length === 0) {
     return (
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center text-slate-400">
@@ -214,6 +92,7 @@ export default function WorkoutPlayer({
   if (phase === "finished") {
     return (
       <div className="rounded-2xl border border-emerald-500/30 bg-slate-900 p-8 text-center">
+        {storageWarning}
         <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
           Workout complete
         </p>
@@ -235,10 +114,10 @@ export default function WorkoutPlayer({
         <button
           type="button"
           onClick={finishWorkout}
-          disabled={isSaving}
+          disabled={isSaving || Boolean(checkpoint?.finalized)}
           className="mt-8 w-full rounded-xl bg-emerald-500 px-6 py-4 font-bold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {isSaving ? "Saving workout..." : "Finish workout"}
+          {checkpoint?.finalized ? "Workout saved" : isSaving ? "Saving workout..." : "Finish workout"}
         </button>
       </div>
     );
@@ -247,6 +126,7 @@ export default function WorkoutPlayer({
   if (phase === "ready") {
     return (
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8 text-center">
+        {storageWarning}
         <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
           Ready
         </p>
@@ -273,6 +153,7 @@ export default function WorkoutPlayer({
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
       <div className="flex items-center justify-between">
+        {storageWarning}
         <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
           {phase === "work" ? "Work" : "Rest"}
         </p>
@@ -310,6 +191,9 @@ export default function WorkoutPlayer({
           </p>
         )}
 
+        {phase === "rest" && nextVideoUrl && <video aria-hidden="true" className="hidden" muted playsInline preload="metadata" src={nextVideoUrl} />}
+        {phase === "work" && <ExerciseVideo key={currentStep.id} url={safeVideoUrl(currentStep.videoUrl)} />}
+
         <div className="mt-10 text-7xl font-bold tabular-nums sm:text-8xl">
           {formatClock(timeRemaining)}
         </div>
@@ -324,7 +208,7 @@ export default function WorkoutPlayer({
       <div className="grid gap-3 sm:grid-cols-2">
         <button
           type="button"
-          onClick={() => setIsPaused((previous) => !previous)}
+          onClick={() => void run(isPaused ? "resume" : "pause", expected)}
           className="rounded-xl border border-slate-700 px-6 py-4 font-semibold transition hover:bg-slate-800"
         >
           {isPaused ? "Resume" : "Pause"}

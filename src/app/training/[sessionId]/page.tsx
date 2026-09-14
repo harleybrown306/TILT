@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import WorkoutPlayer from "@/components/workout/workout-player";
+import CompletedWorkoutDelivery from "@/components/workout/completed-workout-delivery";
 
 type PageProps = {
   params: Promise<{
@@ -23,6 +24,7 @@ type Team = {
 type Exercise = {
   id: string;
   name: string;
+  video_url: string | null;
 };
 
 type WorkoutStep = {
@@ -32,6 +34,7 @@ type WorkoutStep = {
   rest_seconds: number | null;
   off_hand: boolean;
   notes: string | null;
+  exercise_snapshot: { exercise_name?: string; video_url?: string };
   exercises: Exercise | Exercise[] | null;
 };
 
@@ -147,9 +150,11 @@ export default async function TrainingSessionPage({
       rest_seconds,
       off_hand,
       notes,
+      exercise_snapshot,
       exercises (
         id,
-        name
+        name,
+        video_url
       )
     `)
     .eq("workout_id", session.workout_id)
@@ -288,6 +293,7 @@ export default async function TrainingSessionPage({
         </section>
 
         <div className="border-t border-slate-800 pt-8">
+  {isAssignedAthlete && isCompleted && !resultError && <CompletedWorkoutDelivery userId={user.id} sessionId={session.id} resultExists={Boolean(results?.length)} />}
   {isCompleted ? (
     <div className="rounded-2xl border border-emerald-500/30 bg-slate-900 p-8">
       <h2 className="text-2xl font-semibold text-emerald-400">Workout completed</h2>
@@ -304,12 +310,15 @@ export default async function TrainingSessionPage({
   ) : (
   <WorkoutPlayer
   workoutName={workout?.name ?? "Assigned Workout"}
+  userId={user.id}
+  workoutId={session.workout_id}
   sessionId={session.id}
   steps={workoutSteps.map((step) => ({
       id: step.id,
       position: step.position,
       exerciseName:
-        getOne(step.exercises)?.name ?? "Exercise",
+        getOne(step.exercises)?.name ?? step.exercise_snapshot?.exercise_name ?? "Exercise",
+      videoUrl: getOne(step.exercises)?.video_url ?? step.exercise_snapshot?.video_url ?? null,
       durationSeconds: step.duration_seconds ?? 0,
       restSeconds: step.rest_seconds ?? 0,
       offHand: step.off_hand,
