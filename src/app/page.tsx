@@ -365,14 +365,17 @@ export default async function HomePage() {
         )}
 
         <section>
-          <div className="mb-4">
-            <h2 className="text-2xl font-semibold">
-              Your teams
-            </h2>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-semibold">
+                Your teams
+              </h2>
 
-            <p className="mt-1 text-sm text-slate-400">
-              Your experience depends on your role within each team.
-            </p>
+              <p className="mt-1 text-sm text-slate-400">
+                Your experience depends on your role within each team.
+              </p>
+            </div>
+            <Link href="/teams/new" className="rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950 hover:bg-emerald-400">Create Team</Link>
           </div>
 
           {teamMemberships.length === 0 ? (
