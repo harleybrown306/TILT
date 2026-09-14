@@ -292,14 +292,17 @@ export default async function TeamDashboardPage({
     </p>
   </Link>
 
-  <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+  <Link
+    href={`/teams/${teamId}/assign`}
+    className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800"
+  >
     <h3 className="text-lg font-semibold">
       Assign Training
     </h3>
     <p className="mt-2 text-sm text-slate-400">
       Assign training plans to athletes.
     </p>
-  </div>
+  </Link>
 
   <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
     <h3 className="text-lg font-semibold">
