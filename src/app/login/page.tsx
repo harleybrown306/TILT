@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { safeInvitationDestination } from "@/lib/team-invitations";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -29,7 +30,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push("/");
+    router.push(safeInvitationDestination(new URLSearchParams(window.location.search).get("next")));
     router.refresh();
   }
 
@@ -48,6 +49,7 @@ export default function LoginPage() {
           <p className="mt-2 text-sm text-slate-400">
             Access your training, teams, workouts, and progress.
           </p>
+          <p className="mt-3 text-sm text-slate-400">Invitation recipients must sign in with the account associated with their invitation. Account creation is not available here yet.</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-5">
