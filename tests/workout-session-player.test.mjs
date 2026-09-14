@@ -13,6 +13,7 @@ function load(path, mocks = {}) {
  const loaded = {exports:{}}; new vm.Script(`(function(require,module,exports){${code}\n})`).runInThisContext()((name)=>name in mocks?mocks[name]:require(name),loaded,loaded.exports); return loaded.exports;
 }
 const state = load("src/lib/workout-session-state.ts");
+const prescriptionMapper = load("src/lib/training-session-prescription.ts");
 const events = load("src/lib/workout-session-events.ts");
 globalThis.indexedDB = indexedDB;
 const storage = load("src/lib/workout-session-storage.ts", {"./workout-session-state":state,"./workout-session-events":events});
@@ -90,10 +91,17 @@ test("existing canonical result avoids another INSERT",async()=>{const s=complet
 test("wrong account cannot save the athlete result",async()=>{const s=completionSetup({wrongUser:true});await s.button.props.onClick();assert.equal(s.inserts(),0);assert.equal(s.calls.length,0);});
 test("concurrent Finish clicks produce one INSERT",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await Promise.all([s.button.props.onClick(),s.button.props.onClick()]);assert.equal(s.inserts(),1);}finally{globalThis.window=oldWindow;}});
 test("video source changes cleanly with exercise reference",()=>{const first=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/a.mp4"}));const second=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/b.mp4"}));assert.notEqual(first,second);assert.ok(second.includes("b.mp4"));});
+
+test("server prescription mapper rejects unsupported versions and preserves snapshot semantics",()=>{
+ const row={workout_id:input.workoutId,workout_name:"Frozen",schema_version:1,prescribed_work_ms:10000,prescribed_rest_ms:5000,prescribed_total_ms:15000,step_count:1,steps:[{workout_exercise_id:id(4),exercise_id:id(55),exercise_name:"Frozen Exercise",position:0,work_ms:10000,rest_ms:5000,off_hand:true,notes:"Keep"}]};
+ const mapped=prescriptionMapper.mapSessionPrescription(row,new Map([[id(4),"https://example.com/live.mp4"]]));
+ assert.equal(mapped.workoutName,"Frozen");assert.deepEqual(mapped.steps[0],{id:id(4),position:0,exerciseName:"Frozen Exercise",durationSeconds:10,restSeconds:5,offHand:true,notes:"Keep",videoUrl:"https://example.com/live.mp4"});
+ assert.throws(()=>prescriptionMapper.mapSessionPrescription({...row,schema_version:2},new Map()),/Unsupported/);
+});
 function pageSetup(options={}) {
- const queries={training_sessions:{id:input.sessionId,workout_id:input.workoutId,athlete_user_id:input.userId,team_id:id(99),scheduled_date:"2026-09-14",status:options.completed?"completed":"scheduled",workouts:{id:input.workoutId,name:"Test"},teams:{id:id(99),name:"Team"}},workout_results:options.completed?[{id:id(100)}]:[],team_memberships:options.unauthorized?null:{role:"coach"},workout_exercises:[{id:id(4),position:0,duration_seconds:10,rest_seconds:5,off_hand:false,notes:null,exercises:{id:id(55),name:"Test",video_url:null}}]};let mounted=0;
+ const queries={training_sessions:{id:input.sessionId,workout_id:input.workoutId,athlete_user_id:input.userId,team_id:id(99),scheduled_date:"2026-09-14",status:options.completed?"completed":"scheduled",workouts:{id:input.workoutId,name:"Test"},teams:{id:id(99),name:"Team"}},workout_results:options.completed?[{id:id(100)}]:[],team_memberships:options.unauthorized?null:{role:"coach"},workout_exercises:[{id:id(4),position:0,duration_seconds:10,rest_seconds:5,off_hand:false,notes:null,exercises:{id:id(55),name:"Test",video_url:null}}],training_session_prescriptions:{workout_id:input.workoutId,workout_name:"Test",schema_version:1,prescribed_work_ms:10000,prescribed_rest_ms:5000,prescribed_total_ms:15000,step_count:1,steps:[{workout_exercise_id:id(4),exercise_id:id(55),exercise_name:"Snapshot Test",position:0,work_ms:10000,rest_ms:5000,off_hand:false,notes:null}]}};let mounted=0;
  const client={auth:{getUser:async()=>({data:{user:{id:options.coach?id(50):input.userId}}})},from(table){const q={select(){return q;},eq(){return q;},single(){return q;},limit(){return q;},order(){return q;},then(resolve){return Promise.resolve({data:queries[table],error:null}).then(resolve);}};return q;}};
- const page=load("src/app/training/[sessionId]/page.tsx",{"@/lib/supabase/server":{createClient:async()=>client},"next/navigation":{notFound:()=>{throw Error("404");},redirect:()=>{throw Error("redirect");}},"next/link":{default:props=>React.createElement("a",props)},"@/components/workout/workout-player":{default:()=>{mounted++;return React.createElement("div",null,"Player");}},"@/components/workout/completed-workout-delivery":{default:()=>null}});
+ const page=load("src/app/training/[sessionId]/page.tsx",{"@/lib/supabase/server":{createClient:async()=>client},"next/navigation":{notFound:()=>{throw Error("404");},redirect:()=>{throw Error("redirect");}},"next/link":{default:props=>React.createElement("a",props)},"@/components/workout/workout-player":{default:()=>{mounted++;return React.createElement("div",null,"Player");}},"@/components/workout/completed-workout-delivery":{default:()=>null},"@/lib/training-session-prescription":prescriptionMapper});
  return {render:async()=>renderToStaticMarkup(await page.default({params:Promise.resolve({sessionId:input.sessionId})})),mounted:()=>mounted};
 }
 test("coach session stays read-only and never mounts player",async()=>{const p=pageSetup({coach:true});assert.ok((await p.render()).includes("Read-only coach view"));assert.equal(p.mounted(),0);});

@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import WorkoutPlayer from "@/components/workout/workout-player";
 import CompletedWorkoutDelivery from "@/components/workout/completed-workout-delivery";
+import { mapSessionPrescription, type SessionPrescriptionRow } from "@/lib/training-session-prescription";
 
 type PageProps = {
   params: Promise<{
@@ -167,7 +168,16 @@ export default async function TrainingSessionPage({
     );
   }
 
-  const workoutSteps = (steps ?? []) as WorkoutStep[];
+  const liveSteps = (steps ?? []) as WorkoutStep[];
+  const { data: prescription, error: prescriptionError } = await supabase.from("training_session_prescriptions")
+    .select("workout_id,workout_name,schema_version,prescribed_work_ms,prescribed_rest_ms,prescribed_total_ms,step_count,steps")
+    .eq("session_id", session.id).single();
+  let prescribed;
+  try {
+    const videos = new Map(liveSteps.map((step) => [step.id, getOne(step.exercises)?.video_url ?? null]));
+    prescribed = prescriptionError || !prescription ? null : mapSessionPrescription(prescription as SessionPrescriptionRow, videos);
+  } catch { prescribed = null; }
+  const workoutSteps = prescribed?.steps ?? [];
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
@@ -191,7 +201,7 @@ export default async function TrainingSessionPage({
           </div>
 
           <h1 className="mt-4 text-4xl font-bold">
-            {workout?.name ?? "Assigned Workout"}
+            {prescribed?.workoutName ?? "Assigned Workout"}
           </h1>
 
           <p className="mt-3 text-slate-400">
@@ -231,7 +241,7 @@ export default async function TrainingSessionPage({
           ) : (
             <div className="space-y-3">
               {workoutSteps.map((step, index) => {
-                const exercise = getOne(step.exercises);
+                const exercise = step;
 
                 return (
                   <div
@@ -247,10 +257,10 @@ export default async function TrainingSessionPage({
                         <div className="flex flex-col justify-between gap-3 sm:flex-row">
                           <div>
                             <h3 className="text-lg font-semibold">
-                              {exercise?.name ?? "Exercise"}
+                              {exercise.exerciseName}
                             </h3>
 
-                            {step.off_hand && (
+                            {step.offHand && (
                               <p className="mt-1 text-sm font-medium text-emerald-400">
                                 Off hand
                               </p>
@@ -263,7 +273,7 @@ export default async function TrainingSessionPage({
                                 Work
                               </p>
                               <p className="mt-1 font-medium">
-                                {formatTime(step.duration_seconds)}
+                                {formatTime(step.durationSeconds)}
                               </p>
                             </div>
 
@@ -272,7 +282,7 @@ export default async function TrainingSessionPage({
                                 Rest
                               </p>
                               <p className="mt-1 font-medium">
-                                {formatTime(step.rest_seconds)}
+                                {formatTime(step.restSeconds)}
                               </p>
                             </div>
                           </div>
@@ -305,25 +315,15 @@ export default async function TrainingSessionPage({
       <h2 className="text-2xl font-semibold">Read-only coach view</h2>
       <p className="mt-3 text-slate-300">Review the assigned exercise sequence above. Only the assigned athlete can complete this workout.</p>
     </div>
-  ) : resultError ? (
-    <p className="text-slate-300">Unable to verify workout completion. Please reload before starting.</p>
+  ) : resultError || !prescribed ? (
+    <p className="text-slate-300">Unable to load the durable workout prescription. Please reload before starting.</p>
   ) : (
   <WorkoutPlayer
-  workoutName={workout?.name ?? "Assigned Workout"}
+  workoutName={prescribed?.workoutName ?? "Assigned Workout"}
   userId={user.id}
-  workoutId={session.workout_id}
+  workoutId={prescription?.workout_id ?? session.workout_id}
   sessionId={session.id}
-  steps={workoutSteps.map((step) => ({
-      id: step.id,
-      position: step.position,
-      exerciseName:
-        getOne(step.exercises)?.name ?? step.exercise_snapshot?.exercise_name ?? "Exercise",
-      videoUrl: getOne(step.exercises)?.video_url ?? step.exercise_snapshot?.video_url ?? null,
-      durationSeconds: step.duration_seconds ?? 0,
-      restSeconds: step.rest_seconds ?? 0,
-      offHand: step.off_hand,
-      notes: step.notes,
-    }))}
+  steps={workoutSteps}
   />
   )}
 </div>

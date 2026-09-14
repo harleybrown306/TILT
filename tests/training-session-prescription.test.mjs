@@ -1,0 +1,11 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import test from "node:test";
+import ts from "typescript";
+const code=ts.transpileModule(readFileSync(new URL("../src/lib/training-session-prescription.ts",import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;
+const m={exports:{}};new vm.Script(`(function(module,exports){${code}})`).runInThisContext()(m,m.exports);const map=m.exports.mapSessionPrescription;
+const id=n=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+const row={workout_id:id(1),workout_name:"Frozen",schema_version:1,prescribed_work_ms:10000,prescribed_rest_ms:5000,prescribed_total_ms:15000,step_count:1,steps:[{workout_exercise_id:id(2),exercise_id:id(3),exercise_name:"Cradle",position:0,work_ms:10000,rest_ms:5000,off_hand:false,notes:null}]};
+test("maps immutable prescription and adds live video presentation",()=>assert.deepEqual(map(row,new Map([[id(2),"https://example.com/v.mp4"]])).steps[0],{id:id(2),position:0,exerciseName:"Cradle",durationSeconds:10,restSeconds:5,offHand:false,notes:null,videoUrl:"https://example.com/v.mp4"}));
+for(const [name,change] of [["version",{schema_version:2}],["count",{step_count:2}],["totals",{prescribed_total_ms:3}]])test("rejects invalid "+name,()=>assert.throws(()=>map({...row,...change},new Map()),/invalid|Unsupported/i));
