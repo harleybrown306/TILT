@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { isAssignablePlan } from "@/lib/training-plans";
 import {
   isDate,
   isUuid,
@@ -70,12 +71,11 @@ export async function assignTraining(
 
     const { data: plan, error: planError } = await supabase
       .from("training_plans")
-      .select("id, team_id, status")
+      .select("id, owner_user_id, kind, visibility, status")
       .eq("id", planId)
       .single();
-    if (planError || !plan || plan.status !== "active" ||
-        (plan.team_id !== null && plan.team_id !== teamId)) {
-      return error("This training plan is not available for this team.");
+    if (planError || !plan || !isAssignablePlan(plan, user.id)) {
+      return error("Choose an active coach plan from your own library. Templates must be copied first.");
     }
 
     const athletes = await readAllRows<{ user_id: string }>((from, to) => supabase

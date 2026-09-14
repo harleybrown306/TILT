@@ -2,22 +2,24 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import PlanActionForm from "@/components/plans/action-form";
 import ScheduleFields, { planInputClass } from "@/components/plans/schedule-fields";
-import { isDraft, offsetToDayNumber, scheduleVersion, sortPlanItems, type PlanItem, type PlanWorkout } from "@/lib/training-plans";
-import { loadPlanItems, loadPlanWorkouts, requirePlanCoach, requireTeamPlan } from "@/lib/training-plans-server";
-import { mutatePlan } from "../actions";
+import { archiveDescription, isDraft, isPublicTemplate, offsetToDayNumber, restorationWindow, scheduleVersion, sortPlanItems, type PlanItem, type PlanWorkout } from "@/lib/training-plans";
+import { loadPlanItems, loadPlanWorkouts, requirePlanCoach, requireReadablePlan } from "@/lib/training-plans-server";
+import { duplicateTemplate, mutatePlan } from "../actions";
 
 export default async function PlanBuilderPage({ params }: { params: Promise<{ teamId: string; planId: string }> }) {
   const { teamId, planId } = await params;
   const context = await requirePlanCoach(teamId).catch(() => null);
   if (!context) redirect("/");
-  const plan = await requireTeamPlan(context, teamId, planId).catch(() => null);
+  const plan = await requireReadablePlan(context, planId).catch(() => null);
   if (!plan) notFound();
   let items: PlanItem[] = [], workouts: PlanWorkout[] = [];
   let loadFailed = false;
   try {
-    [items, workouts] = await Promise.all([loadPlanItems(context, planId), loadPlanWorkouts(context, teamId)]);
+    [items, workouts] = await Promise.all([loadPlanItems(context, planId), loadPlanWorkouts(context)]);
   } catch { loadFailed = true; }
-  const draft = isDraft(plan.status);
+  const template = isPublicTemplate(plan);
+  const draft = !template && isDraft(plan.status);
+  const restore = restorationWindow(plan);
   const action = mutatePlan.bind(null, teamId, planId);
   const fields = (operation: string, item?: PlanItem) => <>
     <input type="hidden" name="operation" value={operation} />
@@ -34,7 +36,9 @@ export default async function PlanBuilderPage({ params }: { params: Promise<{ te
       <span className="rounded-full bg-slate-800 px-3 py-1 text-sm capitalize text-emerald-400">{plan.status}</span>
       <h1 className="mt-4 text-4xl font-bold">{plan.name}</h1>
       {plan.description && <p className="mt-3 text-slate-400">{plan.description}</p>}
-      {!draft && <p className="mt-3 text-sm text-slate-400">This plan is read-only. Its workout structure is locked to preserve assigned training.</p>}
+      <p className="mt-3 text-sm text-slate-400">{template ? "Public TILT template — read-only master. Use Template to create your own independent draft." : "This plan belongs to your coach library and can be reused across your coaching teams."}</p>
+      {!draft && !template && <p className="mt-3 text-sm text-slate-400">This plan is read-only. Its workout structure is locked to preserve assigned training.</p>}
+      {!template && plan.status === "archived" && <p className="mt-3 text-sm text-slate-400">{archiveDescription(plan)}</p>}
     </header>
     {draft && <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">
       <h2 className="mb-4 text-2xl font-semibold">Plan details</h2>
@@ -47,7 +51,7 @@ export default async function PlanBuilderPage({ params }: { params: Promise<{ te
     <section className="mb-6">
       <h2 className="mb-4 text-2xl font-semibold">Workout schedule</h2>
       <p className="mb-4 text-sm text-slate-400">Day 1 is the assignment&apos;s start date. Day 2 is the following day. Order numbers must be unique across the plan; gaps are allowed. Workouts on the same day follow their order numbers. Times use America/Chicago.</p>
-      {loadFailed ? <p role="alert" className="text-rose-300">Unable to load the schedule or usable workouts. Reload before changing or activating this plan.</p> : items.length === 0 ? <p className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">No workouts yet. Add your first workout below.</p> : <div className="space-y-4">
+      {loadFailed ? <p role="alert" className="text-rose-300">Unable to load the schedule or usable workouts. Reload before changing or activating this plan.</p> : items.length === 0 ? <p className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">{draft ? "No workouts yet. Add your first workout below." : "This plan has no workouts."}</p> : <div className="space-y-4">
         {sortPlanItems(items).map((item) => {
           const workout = workoutById.get(item.workout_id);
           return <article key={item.id} className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -68,7 +72,7 @@ export default async function PlanBuilderPage({ params }: { params: Promise<{ te
     </section>
     {draft && !loadFailed && <section className="mb-6 rounded-2xl border border-slate-800 bg-slate-900 p-6">
       <h2 className="mb-4 text-2xl font-semibold">Add workout</h2>
-      {workouts.length === 0 ? <p className="text-slate-400">No usable workouts are available for you and this team. An existing visible workout with any required entitlement is needed.</p> : <PlanActionForm action={action} label="Add workout">
+      {workouts.length === 0 ? <p className="text-slate-400">No usable workouts are available for your coach library. An existing visible workout with any required entitlement is needed.</p> : <PlanActionForm action={action} label="Add workout">
         {fields("add-item")}
         <label className="block font-medium">Workout<select name="workoutId" required defaultValue="" className={`${planInputClass} mt-2`}>
           <option value="">Select a workout</option>
@@ -78,14 +82,19 @@ export default async function PlanBuilderPage({ params }: { params: Promise<{ te
       </PlanActionForm>}
     </section>}
     <section className="rounded-2xl border border-emerald-500/30 bg-slate-900 p-6">
-      {draft ? <>
+      {template ? <PlanActionForm action={duplicateTemplate.bind(null, teamId, planId)} label="Use Template" disabled={loadFailed}>
+        <p className="text-slate-400">Create an independent draft in My Plans with this schedule. Customize and activate your copy before assigning it.</p>
+      </PlanActionForm> : draft ? <>
         <h2 className="mb-3 text-2xl font-semibold">Ready to assign?</h2>
         <p className="mb-4 text-slate-400">Activation locks the plan structure. Save all edits before activating. This does not assign training automatically.</p>
         <PlanActionForm action={action} label="Activate Plan" disabled={loadFailed || !items.length} confirmation="Activate this plan and lock its structure?">{fields("activate")}</PlanActionForm>
       </> : plan.status === "active" ? <div className="space-y-5">
         <Link href={`/teams/${teamId}/assign`} className="inline-block rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950">Assign Training</Link>
         <PlanActionForm action={action} label="Archive Plan" confirmation="Archive this plan? New assignments will be disabled. Existing assignments and sessions will be retained.">{fields("archive")}</PlanActionForm>
-      </div> : <p className="text-slate-400">Archived plan. Its schedule and history are retained, and it cannot be newly assigned.</p>}
+      </div> : <div className="space-y-4">
+        <p className="text-slate-400">Archived plan. Its schedule and history are retained, and it cannot be newly assigned.</p>
+        {restore.eligible && <PlanActionForm action={action} label="Restore Plan" confirmation="Restore this plan to active? Its structure remains locked; existing assignments and sessions are unchanged.">{fields("restore")}</PlanActionForm>}
+      </div>}
     </section>
   </>;
 }

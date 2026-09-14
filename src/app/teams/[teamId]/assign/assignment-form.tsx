@@ -56,7 +56,7 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
         <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <div>
             <label htmlFor="training-plan" className="mb-2 block font-medium">Training plan</label>
-            {plans.length === 0 ? <p className="text-slate-400">No active training plans are available for this team. A plan must be available before training can be assigned.</p> : <>
+            {plans.length === 0 ? <p className="text-slate-400">No active training plans are available in your coach library. Create a plan or use a TILT template, then activate your draft before assigning it.</p> : <>
               <select id="training-plan" name="trainingPlanId" required value={planId} onChange={(event) => setPlanId(event.target.value)} className={inputClass}>
                 <option value="">Select a training plan</option>
                 {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}
@@ -106,7 +106,7 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
             {recipients.map((athlete) => <li key={athlete.id} className="rounded-full bg-slate-800 px-3 py-1 text-sm">{athlete.name}</li>)}
           </ul> : <p className="mt-4 text-slate-400">Select athletes or a group containing athletes to continue.</p>}
           {!plans.length && <p role="status" className="mt-4 text-sm text-amber-300">
-            Assignment is unavailable because this team has no active training plan. Draft and archived plans cannot be assigned.
+            Assignment is unavailable because your coach library has no active training plan. Draft and archived plans cannot be assigned; TILT templates must be copied first.
           </p>}
           <button type="submit" disabled={!planId || !recipients.length || pending || state.status === "review_required"} className="mt-6 rounded-xl bg-emerald-500 px-6 py-3 font-bold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50">
             {pending ? "Assigning training…" : "Assign Training"}

@@ -15,7 +15,7 @@ export default async function NewPlanPage({ params }: { params: Promise<{ teamId
       <PlanActionForm action={createPlan.bind(null, teamId)} label="Create draft plan">
         <label className="block font-medium">Plan name<input name="name" required className={`${planInputClass} mt-2`} /></label>
         <label className="block font-medium">Description (optional)<textarea name="description" rows={3} className={`${planInputClass} mt-2`} /></label>
-        <p className="text-sm text-slate-400">The plan starts as a draft for this team. Add workouts, then activate it before assigning training.</p>
+        <p className="text-sm text-slate-400">The plan starts as a private draft in My Plans. Reuse it across any team where you coach. Add workouts, then activate it before assigning training.</p>
       </PlanActionForm>
     </div>
   </>;

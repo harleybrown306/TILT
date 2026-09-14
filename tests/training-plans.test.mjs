@@ -36,7 +36,7 @@ function setup(options = {}) {
   const calls = [], invalidations = [];
   const tables = {
     team_memberships: [{ team_id: teamId, user_id: coachId, role: options.role ?? "coach" }],
-    training_plans: [{ id: planId, team_id: options.planTeam ?? teamId, owner_user_id: id(20), name: "Test plan", description: "Description", status: options.status ?? "draft", created_at: version, updated_at: version }],
+    training_plans: [{ id: planId, team_id: null, kind: options.kind ?? "coach", visibility: options.visibility ?? "private", source_template_id: null, archived_at: options.archivedAt ?? null, owner_user_id: options.owner ?? coachId, name: "Test plan", description: "Description", status: options.status ?? "draft", created_at: version, updated_at: version }],
     training_plan_items: options.empty ? [] : [{ id: itemId, training_plan_id: planId, workout_id: workoutId, day_offset: 0, position: 0, scheduled_time: null, notes: null, updated_at: version }],
     workouts: options.inaccessible ? [] : [{ id: workoutId, name: "Workout", description: "Practice", difficulty: "beginner", visibility: "team", team_id: teamId, owner_user_id: coachId, requires_entitlement: options.gated ? "premium_workouts" : null }],
     user_entitlements: options.entitled ? [{ id: id(30), user_id: coachId, plan_id: id(31), status: "active", starts_at: "2020-01-01T00:00:00Z", ends_at: options.expired ? "2020-02-01T00:00:00Z" : null }] : [],
@@ -60,16 +60,22 @@ function setup(options = {}) {
         delete() { operation = "delete"; return query; },
         then(resolve, reject) {
           calls.push({ table, operation, filters, payload });
+          if (options.throwOn === `${table}:${operation}`) return Promise.reject(Error("connection lost")).then(resolve, reject);
+          if (options.failedInsert === table && operation === "insert") return Promise.resolve({ data: null, error: { message: "rejected" }, status: options.failureStatus ?? 403 }).then(resolve, reject);
           if (options.deniedWrite && operation !== "read") return Promise.resolve({ data: [], error: { message: "RLS rejected" } }).then(resolve, reject);
           if (options.readError === table && operation === "read") return Promise.resolve({ data: null, error: { message: "RLS rejected" } }).then(resolve, reject);
           if (options.race && table === "training_plans" && operation === "update") tables.training_plans[0].status = "active";
           const matches = (row) => filters.every(([key, value]) => Array.isArray(value) ? value.includes(row[key]) : row[key] === value);
           let rows = (tables[table] ?? []).filter(matches);
           if (operation === "insert") {
-            const added = { id: id(nextId++), updated_at: version, ...payload };
-            tables[table].push(added); rows = [added];
+            const added = (Array.isArray(payload) ? payload : [payload]).map((value) => ({ id: id(nextId++), updated_at: version, ...value }));
+            tables[table].push(...added); rows = added;
           } else if (operation === "update") {
-            rows.forEach((row) => Object.assign(row, payload, { updated_at: "2026-09-14T13:00:00+00:00" }));
+            rows.forEach((row) => {
+              if (table === "training_plans" && payload.status === "archived") row.archived_at = new Date().toISOString();
+              if (table === "training_plans" && row.status === "archived" && payload.status === "active") row.archived_at = null;
+              Object.assign(row, payload, { updated_at: "2026-09-14T13:00:00+00:00" });
+            });
           } else if (operation === "delete") {
             tables[table] = tables[table].filter((row) => !matches(row));
           } else { rows = rows.slice(start, Math.min(end + 1, start + 2)); }
@@ -122,14 +128,16 @@ test("workout eligibility keeps visibility and entitlement restrictions", () => 
   assert.equal(logic.isWorkoutUsable({ ...workout, visibility: "public", requires_entitlement: "premium" }, teamId, coachId, new Set()), false);
   assert.equal(logic.isWorkoutUsable({ ...workout, visibility: "public", requires_entitlement: "premium" }, teamId, coachId, new Set(["premium"])), true);
 });
-test("creation derives team and owner from the session and starts as draft", async () => {
+test("creation derives coach ownership and private library values from the session", async () => {
   const fixture = setup();
-  await assert.rejects(fixture.actions.createPlan(teamId, idle, form("create", { team_id: id(99), owner_user_id: id(99), status: "active" })), /REDIRECT:/);
+  await assert.rejects(fixture.actions.createPlan(teamId, idle, form("create", { team_id: id(99), owner_user_id: id(99), status: "active", kind: "template", visibility: "public" })), /REDIRECT:/);
   const payload = writes(fixture)[0].payload;
-  assert.equal(payload.team_id, teamId);
+  assert.equal(payload.team_id, null);
+  assert.equal(payload.kind, "coach");
+  assert.equal(payload.visibility, "private");
   assert.equal(payload.owner_user_id, coachId);
   assert.equal(payload.status, "draft");
-  assert.equal(fixture.invalidations.length, 3);
+  assert.equal(fixture.invalidations.length, 2);
 });
 test("blank plan names cannot be created", async () => {
   const fixture = setup();
@@ -140,7 +148,8 @@ test("blank plan names cannot be created", async () => {
 for (const [name, options, operation, fields] of [
   ["signed out", { signedOut: true }, "save-plan", {}],
   ["athlete", { role: "athlete" }, "save-plan", {}],
-  ["wrong team", { planTeam: id(99) }, "save-plan", {}],
+  ["other owner", { owner: id(99) }, "save-plan", {}],
+  ["master template", { kind: "template", visibility: "public" }, "save-plan", {}],
   ["stale plan version", {}, "save-plan", { planVersion: "old" }],
   ["wrong plan item", {}, "save-item", { itemId: id(99) }],
   ["stale item version", {}, "remove-item", { itemVersion: "old" }],
@@ -174,11 +183,11 @@ for (const status of ["active", "archived"]) {
   }
 }
 
-test("assistant coach edits team plan details even when another coach owns it", async () => {
+test("assistant coach edits their own library plan details", async () => {
   const fixture = setup({ role: "assistant_coach" });
   assert.equal((await fixture.actions.mutatePlan(teamId, planId, idle, form("save-plan"))).status, "success");
   assert.equal(fixture.tables.training_plans[0].name, "New name");
-  assert.deepEqual(writes(fixture)[0].filters, [["id", planId], ["team_id", teamId], ["status", "draft"], ["updated_at", version]]);
+  assert.deepEqual(writes(fixture)[0].filters, [["id", planId], ["kind", "coach"], ["owner_user_id", coachId], ["status", "draft"], ["updated_at", version]]);
 });
 test("draft can add a workout using human day and order numbers", async () => {
   const fixture = setup();
@@ -283,3 +292,189 @@ for (const status of ["draft", "active", "archived"]) {
     }
   });
 }
+
+const DAY = 86400000;
+test("restore window uses archived_at with an inclusive exact 30-day boundary", () => {
+  const now = Date.parse("2026-09-14T12:00:00Z");
+  const archived = (age) => ({ status: "archived", archived_at: new Date(now - age).toISOString(), updated_at: "2026-09-14T11:59:59Z" });
+  assert.deepEqual(logic.restorationWindow(archived(4 * DAY), now), { eligible: true, daysAgo: 4, daysRemaining: 26 });
+  assert.equal(logic.restorationWindow(archived(30 * DAY), now).eligible, true);
+  assert.equal(logic.restorationWindow(archived(30 * DAY + 1), now).eligible, false);
+  for (const value of [null, "bad date", new Date(now + DAY).toISOString()]) assert.equal(logic.restorationWindow({ status: "archived", archived_at: value }, now).eligible, false);
+  assert.equal(logic.restorationWindow({ ...archived(DAY), status: "active" }, now).eligible, false);
+  assert.match(logic.archiveDescription(archived(4 * DAY), now), /Archived 4 days ago.*26 more days/);
+  assert.match(logic.archiveDescription(archived(31 * DAY), now), /window has ended/);
+});
+for (const [label, options] of [
+  ["expired archive", { status: "archived", archivedAt: new Date(Date.now() - 31 * DAY).toISOString() }],
+  ["missing archive date", { status: "archived" }],
+  ["draft", {}],
+  ["active", { status: "active" }],
+  ["other owner", { status: "archived", owner: id(99), archivedAt: new Date().toISOString() }],
+  ["template", { status: "archived", kind: "template", visibility: "public", archivedAt: new Date().toISOString() }],
+]) {
+  test(`restore rejects ${label} without writes`, async () => {
+    const fixture = setup(options);
+    assert.equal((await fixture.actions.mutatePlan(teamId, planId, idle, form("restore"))).status, "error");
+    assert.equal(writes(fixture).length, 0);
+  });
+}
+test("eligible restore changes status to active and relies on trigger to clear archived_at", async () => {
+  const fixture = setup({ status: "archived", archivedAt: new Date(Date.now() - 29 * DAY).toISOString() });
+  const items = structuredClone(fixture.tables.training_plan_items);
+  assert.equal((await fixture.actions.mutatePlan(teamId, planId, idle, form("restore"))).status, "success");
+  assert.equal(fixture.tables.training_plans[0].status, "active");
+  assert.equal(fixture.tables.training_plans[0].archived_at, null);
+  assert.deepEqual(writes(fixture)[0].payload, { status: "active" });
+  assert.deepEqual(fixture.tables.training_plan_items, items);
+  assert.equal(writes(fixture).length, 1);
+});
+test("a single owned plan opens and changes from either coached team; unauthorized context fails", async () => {
+  const fixture = setup();
+  fixture.tables.team_memberships.push({ team_id: id(50), user_id: coachId, role: "assistant_coach" });
+  const second = await fixture.server.requirePlanCoach(id(50));
+  assert.equal((await fixture.server.requireCoachPlan(second, planId)).id, planId);
+  assert.equal((await fixture.actions.mutatePlan(id(50), planId, idle, form("save-plan"))).status, "success");
+  assert.equal(fixture.tables.training_plans.length, 1);
+  assert.equal(fixture.tables.training_plans[0].team_id, null);
+  await assert.rejects(fixture.server.requirePlanCoach(id(51)), /coaching permission/);
+});
+test("library workout eligibility includes all coached teams, excluding athlete-only teams", async () => {
+  const fixture = setup();
+  fixture.tables.team_memberships.push({ team_id: id(50), user_id: coachId, role: "assistant_coach" }, { team_id: id(51), user_id: coachId, role: "athlete" });
+  fixture.tables.workouts.push(
+    { ...fixture.tables.workouts[0], id: id(60), team_id: id(50), owner_user_id: id(99) },
+    { ...fixture.tables.workouts[0], id: id(61), team_id: id(51), owner_user_id: id(99) },
+  );
+  assert.deepEqual((await fixture.server.loadPlanWorkouts(await fixture.server.requirePlanCoach(teamId))).map((workout) => workout.id), [workoutId, id(60)]);
+});
+
+function templateFixture(options = {}) {
+  const fixture = setup({ kind: "template", visibility: "public", owner: id(99), ...options });
+  fixture.tables.training_plan_items.push(...Array.from({ length: 4 }, (_, index) => ({
+    ...fixture.tables.training_plan_items[0], id: id(70 + index), position: index + 1, day_offset: index + 1, scheduled_time: "10:30:00", notes: `Item ${index}`,
+  })));
+  return fixture;
+}
+test("template duplication copies all paginated items with independent identities and canonical ownership", async () => {
+  const fixture = templateFixture();
+  const original = structuredClone({ plan: fixture.tables.training_plans[0], items: fixture.tables.training_plan_items });
+  await assert.rejects(fixture.actions.duplicateTemplate(teamId, planId, idle, form("copy", { owner_user_id: id(98), team_id: id(98), source_template_id: id(98) })), /REDIRECT:/);
+  const [planWrite, itemsWrite] = writes(fixture);
+  const copyId = planWrite.payload.id;
+  assert.deepEqual(planWrite.payload, { id: copyId, name: original.plan.name, description: original.plan.description, kind: "coach", visibility: "private", owner_user_id: coachId, team_id: null, status: "draft", source_template_id: planId });
+  assert.equal(itemsWrite.payload.length, 5);
+  assert.deepEqual(itemsWrite.payload, original.items.map(({ workout_id, day_offset, position, scheduled_time, notes }) => ({ training_plan_id: copyId, workout_id, day_offset, position, scheduled_time, notes })));
+  const copyItems = fixture.tables.training_plan_items.filter((item) => item.training_plan_id === copyId);
+  assert.ok(copyItems.every((item) => !original.items.some((source) => source.id === item.id)));
+  assert.equal((await fixture.actions.mutatePlan(teamId, copyId, idle, form("save-item", { itemId: copyItems[0].id, orderNumber: "10" }))).status, "success");
+  assert.deepEqual(fixture.tables.training_plan_items.filter((item) => item.training_plan_id === planId), original.items);
+  const copiedNotes = copyItems[0].notes;
+  fixture.tables.training_plan_items.find((item) => item.id === itemId).notes = "Master updated";
+  assert.equal(copyItems[0].notes, copiedNotes);
+  assert.ok(!fixture.calls.some((call) => ["training_sessions", "training_plan_assignments", "training_assignment_batches"].includes(call.table)));
+});
+for (const [label, options] of [
+  ["coach plan source", { kind: "coach", owner: coachId }],
+  ["private template", { visibility: "private" }],
+  ["athlete", { role: "athlete" }],
+  ["signed out", { signedOut: true }],
+  ["unusable workout", { inaccessible: true }],
+  ["unentitled workout", { gated: true }],
+]) {
+  test(`template duplication rejects ${label} before writes`, async () => {
+    const fixture = templateFixture(options);
+    assert.equal((await fixture.actions.duplicateTemplate(teamId, planId, idle, form("copy"))).status, "error");
+    assert.equal(writes(fixture).length, 0);
+  });
+}
+for (const options of [
+  { failedInsert: "training_plans", failureStatus: 503 },
+  { failedInsert: "training_plan_items", failureStatus: 403 },
+  { throwOn: "training_plan_items:insert" },
+]) {
+  test(`incomplete/uncertain template copy ${JSON.stringify(options)} blocks retries and never deletes`, async () => {
+    const fixture = templateFixture(options);
+    const result = await fixture.actions.duplicateTemplate(teamId, planId, idle, form("copy"));
+    assert.equal(result.status, "review_required");
+    assert.ok(result.recoveryUrl.startsWith(`/teams/${teamId}/plans/`));
+    const count = writes(fixture).length;
+    assert.deepEqual(await fixture.actions.duplicateTemplate(teamId, planId, result, form("copy")), result);
+    assert.equal(writes(fixture).length, count);
+    assert.ok(!writes(fixture).some((call) => call.operation === "delete"));
+  });
+}
+test("definite rejected plan copy does not copy items or claim success", async () => {
+  const fixture = templateFixture({ failedInsert: "training_plans", failureStatus: 403 });
+  assert.equal((await fixture.actions.duplicateTemplate(teamId, planId, idle, form("copy"))).status, "error");
+  assert.equal(writes(fixture).length, 1);
+});
+
+async function renderBuilder(fixture) {
+  const Form = ({ label, children }) => React.createElement("form", null, children, React.createElement("button", null, label));
+  const page = loadTs("src/app/teams/[teamId]/plans/[planId]/page.tsx", {
+    ...fixture.mocks, "../actions": fixture.actions,
+    "@/components/plans/action-form": { default: Form },
+    "@/components/plans/schedule-fields": { default: () => null, planInputClass: "input" },
+    "next/link": { default: (props) => React.createElement("a", props) },
+    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
+  }).default;
+  return renderToStaticMarkup(await page({ params: Promise.resolve({ teamId, planId }) }));
+}
+for (const status of ["draft", "active", "archived"]) {
+  test(`${status} master template renders only Use Template, never coach mutation/assignment controls`, async () => {
+    const markup = await renderBuilder(templateFixture({ status }));
+    assert.ok(markup.includes("Use Template"));
+    for (const forbidden of ["Activate Plan", "Archive Plan", "Restore Plan", "save-plan", `/teams/${teamId}/assign`]) assert.ok(!markup.includes(forbidden));
+  });
+}
+test("restore control displays only with eligible archived_at, never recent updated_at alone", async () => {
+  assert.ok((await renderBuilder(setup({ status: "archived", archivedAt: new Date(Date.now() - 4 * DAY).toISOString() }))).includes("Restore Plan"));
+  assert.ok(!(await renderBuilder(setup({ status: "archived", archivedAt: new Date(Date.now() - 31 * DAY).toISOString() }))).includes("Restore Plan"));
+});
+
+async function renderLibrary(fixture, view, contextTeam = teamId) {
+  const Form = ({ label }) => React.createElement("button", null, label);
+  const page = loadTs("src/app/teams/[teamId]/plans/page.tsx", {
+    ...fixture.mocks, "./actions": fixture.actions,
+    "@/components/plans/action-form": { default: Form },
+    "next/link": { default: (props) => React.createElement("a", props) },
+    "next/navigation": { redirect: () => { throw Error("redirect"); } },
+  }).default;
+  return renderToStaticMarkup(await page({ params: Promise.resolve({ teamId: contextTeam }), searchParams: Promise.resolve({ view }) }));
+}
+test("library separates My Plans, public templates and own archived plans across team contexts", async () => {
+  const fixture = setup();
+  const base = fixture.tables.training_plans[0];
+  fixture.tables.training_plans.push(
+    { ...base, id: id(80), name: "Other coach plan", owner_user_id: id(99) },
+    { ...base, id: id(81), name: "Public master", kind: "template", visibility: "public", owner_user_id: id(99) },
+    { ...base, id: id(82), name: "Own archived", status: "archived", archived_at: new Date(Date.now() - 4 * DAY).toISOString() },
+    { ...base, id: id(83), name: "Private master", kind: "template" },
+  );
+  fixture.tables.team_memberships.push({ team_id: id(50), user_id: coachId, role: "coach" });
+  for (const context of [teamId, id(50)]) {
+    const mine = await renderLibrary(fixture, "mine", context);
+    assert.ok(mine.includes("Test plan"));
+    for (const forbidden of ["Other coach plan", "Public master", "Own archived"]) assert.ok(!mine.includes(forbidden));
+  }
+  const templates = await renderLibrary(fixture, "templates");
+  assert.ok(templates.includes("Public master") && templates.includes("Use Template"));
+  assert.ok(!templates.includes("Private master") && !templates.includes("Test plan"));
+  const archived = await renderLibrary(fixture, "archived");
+  assert.ok(archived.includes("Own archived") && archived.includes("26 more days"));
+  assert.ok(!archived.includes("Test plan") && !archived.includes("Other coach plan"));
+});
+test("copy failure form shows review link/error and disables repeat submission", () => {
+  const state = { status: "review_required", message: "Review the copy", recoveryUrl: `/teams/${teamId}/plans/${planId}` };
+  const component = loadTs("src/components/plans/action-form.tsx", {
+    react: { ...React, useActionState: () => [state, () => {}, false] },
+    "@/lib/training-plans": logic,
+    "next/link": { default: (props) => React.createElement("a", props) },
+  }).default;
+  const tree = component({ action: async () => state, children: null, label: "Use Template" });
+  assert.equal(find(tree, "fieldset").props.disabled, true);
+  assert.equal(find(tree, "button").props.disabled, true);
+  assert.equal(find(tree, "p").props.role, "alert");
+  assert.ok(renderToStaticMarkup(tree).includes(`href="${state.recoveryUrl}"`));
+});

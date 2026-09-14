@@ -284,7 +284,7 @@ export default async function TeamDashboardPage({
     className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800"
   >
     <h3 className="text-lg font-semibold">Training Plans</h3>
-    <p className="mt-2 text-sm text-slate-400">Build, activate, and archive reusable workout schedules.</p>
+    <p className="mt-2 text-sm text-slate-400">Manage your coach library, use TILT templates, and reuse plans across your teams.</p>
   </Link>
   <Link
     href={`/teams/${teamId}/groups`}

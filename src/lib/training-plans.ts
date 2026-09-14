@@ -6,6 +6,10 @@ export type Plan = {
   name: string;
   description: string | null;
   status: PlanStatus;
+  kind: "coach" | "template";
+  visibility: "private" | "public";
+  source_template_id: string | null;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -29,7 +33,33 @@ export type PlanWorkout = {
   team_id: string | null;
   requires_entitlement: string | null;
 };
-export type PlanActionState = { status: "idle" | "error" | "success"; message: string };
+export type PlanActionState = { status: "idle" | "error" | "success" | "review_required"; message: string; recoveryUrl?: string };
+
+export function isOwnedCoachPlan(plan: Pick<Plan, "kind" | "visibility" | "owner_user_id">, userId: string) {
+  return plan.kind === "coach" && plan.visibility === "private" && plan.owner_user_id === userId;
+}
+export function isPublicTemplate(plan: Pick<Plan, "kind" | "visibility">) {
+  return plan.kind === "template" && plan.visibility === "public";
+}
+export function isAssignablePlan(plan: Pick<Plan, "kind" | "visibility" | "owner_user_id" | "status">, userId: string) {
+  return isOwnedCoachPlan(plan, userId) && plan.status === "active";
+}
+const DAY_MS = 86400000;
+export function restorationWindow(plan: Pick<Plan, "status" | "archived_at">, now = Date.now()) {
+  const archived = plan.archived_at ? Date.parse(plan.archived_at) : NaN;
+  const age = now - archived;
+  const eligible = plan.status === "archived" && Number.isFinite(age) && age >= 0 && age <= 30 * DAY_MS;
+  return {
+    eligible,
+    daysAgo: Number.isFinite(age) && age >= 0 ? Math.floor(age / DAY_MS) : null,
+    daysRemaining: eligible ? Math.ceil((30 * DAY_MS - age) / DAY_MS) : 0,
+  };
+}
+export function archiveDescription(plan: Pick<Plan, "status" | "archived_at">, now = Date.now()) {
+  const window = restorationWindow(plan, now);
+  if (window.daysAgo === null) return "Archive date unavailable — coach restoration is unavailable.";
+  return `Archived ${window.daysAgo} ${window.daysAgo === 1 ? "day" : "days"} ago — ${window.eligible ? `restore available for ${window.daysRemaining} more ${window.daysRemaining === 1 ? "day" : "days"}` : "the 30-day coach restoration window has ended"}.`;
+}
 
 const MAX_INTEGER = 2147483647;
 export function dayNumberToOffset(day: number) {
@@ -70,7 +100,8 @@ export function readSchedule(data: FormData) {
     notes: readText(data, "notes"),
   };
 }
-export function isWorkoutUsable(workout: PlanWorkout, teamId: string, userId: string, enabledFeatures: Set<string>) {
-  const relevant = workout.visibility === "public" || workout.owner_user_id === userId || (workout.visibility === "team" && workout.team_id === teamId);
+export function isWorkoutUsable(workout: PlanWorkout, coachingTeamIds: string | string[], userId: string, enabledFeatures: Set<string>) {
+  const teams = typeof coachingTeamIds === "string" ? [coachingTeamIds] : coachingTeamIds;
+  const relevant = workout.visibility === "public" || workout.owner_user_id === userId || (workout.visibility === "team" && workout.team_id !== null && teams.includes(workout.team_id));
   return relevant && (!workout.requires_entitlement || enabledFeatures.has(workout.requires_entitlement));
 }

@@ -1,7 +1,9 @@
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid, readAllRows } from "@/lib/training-assignment";
-import { isWorkoutUsable, type Plan, type PlanItem, type PlanWorkout } from "@/lib/training-plans";
+import { isOwnedCoachPlan, isPublicTemplate, isWorkoutUsable, type Plan, type PlanItem, type PlanWorkout } from "@/lib/training-plans";
+
+export const PLAN_COLUMNS = "id, team_id, owner_user_id, name, description, status, kind, visibility, source_template_id, archived_at, created_at, updated_at";
 
 export async function requirePlanCoach(teamId: string) {
   if (!isUuid(teamId)) throw new Error("Invalid team.");
@@ -11,19 +13,24 @@ export async function requirePlanCoach(teamId: string) {
   const { data: membership, error: membershipError } = await supabase.from("team_memberships")
     .select("role").eq("team_id", teamId).eq("user_id", user.id).single();
   if (membershipError || !membership || !["coach", "assistant_coach"].includes(membership.role)) {
-    throw new Error("You do not have permission to manage this team's plans.");
+    throw new Error("You do not have coaching permission for this team context.");
   }
   return { supabase, user };
 }
 
 export type PlanContext = Awaited<ReturnType<typeof requirePlanCoach>>;
-export async function requireTeamPlan(context: PlanContext, teamId: string, planId: string): Promise<Plan> {
+export async function requireReadablePlan(context: PlanContext, planId: string): Promise<Plan> {
   if (!isUuid(planId)) throw new Error("Invalid training plan.");
   const { data, error } = await context.supabase.from("training_plans")
-    .select("id, team_id, owner_user_id, name, description, status, created_at, updated_at")
-    .eq("id", planId).eq("team_id", teamId).single();
-  if (error || !data || data.team_id !== teamId) throw new Error("This training plan is unavailable for this team.");
+    .select(PLAN_COLUMNS).eq("id", planId).single();
+  if (error || !data || (!isOwnedCoachPlan(data, context.user.id) && !isPublicTemplate(data))) throw new Error("This training plan is unavailable in your library.");
   return data as Plan;
+}
+
+export async function requireCoachPlan(context: PlanContext, planId: string): Promise<Plan> {
+  const plan = await requireReadablePlan(context, planId);
+  if (!isOwnedCoachPlan(plan, context.user.id)) throw new Error("Only your own coach plans can be changed. Templates are read-only.");
+  return plan;
 }
 
 export async function loadPlanItems(context: PlanContext, planId: string) {
@@ -32,7 +39,9 @@ export async function loadPlanItems(context: PlanContext, planId: string) {
     .eq("training_plan_id", planId).order("id").range(from, to));
 }
 
-export async function loadPlanWorkouts(context: PlanContext, teamId: string) {
+export async function loadPlanWorkouts(context: PlanContext) {
+  const memberships = await readAllRows<{ team_id: string }>((from, to) => context.supabase.from("team_memberships")
+    .select("team_id").eq("user_id", context.user.id).in("role", ["coach", "assistant_coach"]).order("id").range(from, to));
   const workouts = await readAllRows<PlanWorkout>((from, to) => context.supabase.from("workouts")
     .select("id, name, description, difficulty, visibility, owner_user_id, team_id, requires_entitlement")
     .order("name").order("id").range(from, to));
@@ -49,7 +58,7 @@ export async function loadPlanWorkouts(context: PlanContext, teamId: string) {
       features.forEach((feature) => enabledFeatures.add(feature.feature_key));
     }
   }
-  return workouts.filter((workout) => isWorkoutUsable(workout, teamId, context.user.id, enabledFeatures));
+  return workouts.filter((workout) => isWorkoutUsable(workout, memberships.map((membership) => membership.team_id), context.user.id, enabledFeatures));
 }
 
 // Serialize this app's mutations within a server process, including activation.

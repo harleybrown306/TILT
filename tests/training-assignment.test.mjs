@@ -22,6 +22,7 @@ function loadTs(path, mocks = {}) {
 }
 
 const helper = loadTs("src/lib/training-assignment.ts");
+const plans = loadTs("src/lib/training-plans.ts");
 const id = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`;
 const teamId = id(1), planId = id(2), coachId = id(3);
 const athleteA = id(4), athleteB = id(5), athleteC = id(6);
@@ -49,7 +50,7 @@ function setup(options = {}) {
         profiles: { full_name: `Athlete ${index + 1}` },
       })),
     ],
-    training_plans: [{ id: planId, team_id: options.planTeam === undefined ? teamId : options.planTeam, status: options.planStatus ?? "active", name: "Test plan", description: null }],
+    training_plans: [{ id: planId, team_id: options.planTeam ?? null, owner_user_id: options.planOwner ?? coachId, kind: options.planKind ?? "coach", visibility: options.planVisibility ?? "private", status: options.planStatus ?? "active", name: "Test plan", description: null }],
     team_groups: [{ id: groupA, team_id: teamId, name: "Group A" }, { id: groupB, team_id: teamId, name: "Group B" }],
     team_group_memberships: [
       { id: id(20), team_group_id: groupA, athlete_user_id: athleteA },
@@ -106,6 +107,7 @@ function setup(options = {}) {
   const mocks = {
     "@/lib/supabase/server": { createClient: async () => client },
     "@/lib/training-assignment": helper,
+    "@/lib/training-plans": plans,
     "next/cache": { revalidatePath: (path) => revalidated.push(path) },
   };
   // Capture review metadata without noisy logs or any external data.
@@ -115,7 +117,7 @@ function setup(options = {}) {
   const actionModule = { exports: {} };
   const run = new vm.Script(`(function(require, module, exports, console) {${actionModuleSource}\n})`).runInThisContext();
   run((name) => name in mocks ? mocks[name] : require(name), actionModule, actionModule.exports, { error: (...values) => reviews.push(values) });
-  return { action: actionModule.exports.assignTraining, calls, revalidated, reviews, mocks };
+  return { action: actionModule.exports.assignTraining, calls, revalidated, reviews, mocks, tables };
 }
 
 const writes = (fixture) => fixture.calls.filter((call) => call.operation !== "read");
@@ -170,7 +172,8 @@ for (const [name, options, input] of [
   ["signed out", { signedOut: true }, {}],
   ["athlete role", { role: "athlete" }, {}],
   ["not a member", { missingMembership: true }, {}],
-  ["other team's plan", { planTeam: otherTeam }, {}],
+  ["other coach's plan", { planOwner: id(999) }, {}],
+  ["public template", { planKind: "template", planVisibility: "public" }, {}],
   ["draft plan", { planStatus: "draft" }, {}],
   ["archived plan", { planStatus: "archived" }, {}],
   ["missing plan", { emptyPlans: true }, {}],
@@ -193,7 +196,7 @@ for (const [name, options, input] of [
   });
 }
 
-test("assistant coach can assign an RLS-visible active shared plan without groups", async () => {
+test("assistant coach can assign their own active library plan without groups", async () => {
   const fixture = setup({ role: "assistant_coach", planTeam: null, emptyGroups: true });
   assert.equal((await fixture.action(teamId, idle, form())).status, "success");
 });
@@ -414,4 +417,59 @@ test("action validation errors remain visible in the form", () => {
   const tree = uiFixture({ state }).render();
   const alert = findNode(tree, (node) => node.props.role === "alert");
   assert.equal(alert.props.children, state.message);
+});
+
+function addSecondTeam(fixture, role = "assistant_coach") {
+  fixture.tables.teams.push({ id: otherTeam, name: "Second team" });
+  fixture.tables.team_memberships.push(
+    { id: id(50), team_id: otherTeam, user_id: coachId, role },
+    { id: id(51), team_id: otherTeam, user_id: id(52), role: "athlete", profiles: { full_name: "Second team athlete" } },
+  );
+}
+test("one coach library plan is reusable across two authorized assignment teams", async () => {
+  const fixture = setup();
+  addSecondTeam(fixture);
+  assert.equal((await fixture.action(teamId, idle, form())).status, "success");
+  assert.equal((await fixture.action(otherTeam, idle, form({ individuals: [id(52)] }))).status, "success");
+  const assignmentWrites = writes(fixture).filter((call) => call.table === "training_plan_assignments");
+  assert.equal(assignmentWrites.length, 2);
+  assert.equal(assignmentWrites[0].payload[0].training_plan_id, assignmentWrites[1].payload[0].training_plan_id);
+  assert.equal(assignmentWrites[1].payload[0].team_id, otherTeam);
+  assert.equal(assignmentWrites[1].payload[0].athlete_user_id, id(52));
+  assert.ok(!writes(fixture).some((call) => call.table === "training_plans"));
+});
+test("own plan cannot be assigned in an athlete-only team context", async () => {
+  const fixture = setup();
+  addSecondTeam(fixture, "athlete");
+  assert.equal((await fixture.action(otherTeam, idle, form({ individuals: [id(52)] }))).status, "error");
+  assert.equal(writes(fixture).length, 0);
+});
+for (const input of [{ individuals: [athleteA] }, { individuals: [], groups: [groupA] }]) {
+  test(`cross-team library plan still rejects foreign recipients ${JSON.stringify(input)}`, async () => {
+    const fixture = setup();
+    addSecondTeam(fixture);
+    assert.equal((await fixture.action(otherTeam, idle, form(input))).status, "error");
+    assert.equal(writes(fixture).length, 0);
+  });
+}
+test("assignment catalog filters owner/kind/status and never filters by plan team", async () => {
+  const fixture = setup();
+  fixture.tables.training_plans.push(
+    { ...fixture.tables.training_plans[0], id: id(60), owner_user_id: id(999) },
+    { ...fixture.tables.training_plans[0], id: id(61), kind: "template", visibility: "public" },
+    { ...fixture.tables.training_plans[0], id: id(62), status: "draft" },
+    { ...fixture.tables.training_plans[0], id: id(63), status: "archived" },
+  );
+  addSecondTeam(fixture);
+  const Form = () => null;
+  const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
+    ...fixture.mocks, "./assignment-form": { default: Form }, "next/link": { default: () => null },
+    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
+  }).default;
+  for (const contextTeam of [teamId, otherTeam]) {
+    const tree = await page({ params: Promise.resolve({ teamId: contextTeam }) });
+    assert.deepEqual(findComponent(tree, Form).props.plans.map((plan) => plan.id), [planId]);
+  }
+  const reads = fixture.calls.filter((call) => call.table === "training_plans");
+  assert.ok(reads.every((call) => !call.filters.some(([key]) => key === "team_id")));
 });

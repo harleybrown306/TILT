@@ -50,7 +50,9 @@ export default async function AssignTrainingPage({
         .from("training_plans")
         .select("id, name, description")
         .eq("status", "active")
-        .or(`team_id.eq.${team.id},team_id.is.null`)
+        .eq("kind", "coach")
+        .eq("visibility", "private")
+        .eq("owner_user_id", user.id)
         .order("name")
         .order("id")
         .range(from, to)),
@@ -116,7 +118,7 @@ export default async function AssignTrainingPage({
         <header className="my-8">
           <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">{team.name}</p>
           <h1 className="mt-2 text-4xl font-bold">Assign Training</h1>
-          <p className="mt-3 text-slate-400">Choose a plan and select groups, individual athletes, or both.</p>
+          <p className="mt-3 text-slate-400">Choose an active plan from your coach library and select groups or athletes on {team.name}.</p>
         </header>
         {assignmentData ? <AssignmentForm teamId={team.id} {...assignmentData} /> : (
           <div role="alert" className="rounded-2xl border border-rose-900 bg-slate-900 p-6 text-rose-300">
