@@ -301,6 +301,9 @@ export default async function HomePage() {
             <p className="mt-3 text-slate-400">Your Time Interval Lacrosse Training dashboard.</p>
           </div>
           <div className="flex flex-wrap items-center gap-4">
+            {athleteMemberships.length > 0 && (
+              <Link href="/training-resume" className="font-semibold text-emerald-400">Training Resume</Link>
+            )}
             {profile?.platform_role === "admin" && (
               <Link href="/admin" className="font-semibold text-emerald-400">Admin</Link>
             )}
