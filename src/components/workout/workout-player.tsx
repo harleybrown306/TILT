@@ -26,7 +26,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutI
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const input = useMemo(() => ({ workoutName, sessionId, userId, workoutId, steps: prescribedSteps }), [workoutName, sessionId, userId, workoutId, prescribedSteps]);
-  const { checkpoint, ready, warning, run, flush } = useWorkoutSession(input);
+  const { checkpoint, ready, warning, run, flush, finalizeAttempt } = useWorkoutSession(input);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const savingRef = useRef(false);
@@ -57,6 +57,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutI
       if (sessionError || !session || session.athlete_user_id !== user.id || resultError) throw new Error("Unable to verify permission to complete this workout.");
       if (session.status === "completed" || results?.length) {
         if (results?.length) await run("finalize").catch(() => {});
+        if (results?.length) await Promise.race([finalizeAttempt().catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, 2000))]);
         router.push(`/training/${sessionId}`); router.refresh(); return;
       }
       // Preserve legacy prescribed result fields; accurate attempt timing stays
@@ -74,7 +75,8 @@ export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutI
         if (!saved?.length) throw new Error("Unable to save workout. Retry to check whether it was saved.");
       }
       // Result is committed first. Telemetry/recovery failure cannot undo it.
-      await Promise.race([run("finalize").catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, 2000))]);
+      await run("finalize").catch(() => {});
+      await Promise.race([finalizeAttempt().catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, 2000))]);
       void flush(); router.push(`/training/${sessionId}`); router.refresh();
     } catch (error) { setSaveError(error instanceof Error ? error.message : "Unable to save workout. Retry safely."); }
     finally { savingRef.current = false; setIsSaving(false); }

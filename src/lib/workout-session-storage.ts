@@ -78,10 +78,10 @@ export function acknowledge(bundle: Bundle, sent: WorkoutSessionEvent[], payload
     else if (ack.status === "conflict" || ack.status === "rejected") item.status = ack.status;
   }
 }
-const flushing = new Set<string>();
-export async function flushEvents(userId: string, verifyUser: () => Promise<string | null>) {
-  if (flushing.has(userId)) return;
-  flushing.add(userId);
+const flushing = new Map<string, Promise<void>>();
+export function flushEvents(userId: string, verifyUser: () => Promise<string | null>, afterAcknowledged?: (events: WorkoutSessionEvent[]) => Promise<void> | void): Promise<void> {
+  const existing = flushing.get(userId); if (existing) return existing;
+  const work = (async () => {
   try {
     for (let batchIndex = 0; batchIndex < 4; batchIndex++) {
       if (await verifyUser() !== userId) return;
@@ -94,9 +94,14 @@ export async function flushEvents(userId: string, verifyUser: () => Promise<stri
       if (!response.ok) return;
       const payload: unknown = await response.json();
       const current = await mutateBundle(userId, (current) => acknowledge(current, events, payload));
+      const acknowledgements = (payload as { acknowledgements?: { id?: unknown; status?: unknown }[] }).acknowledgements ?? [];
+      const accepted = events.filter((event) => acknowledgements.some((ack) => ack?.id === event.id && (ack.status === "accepted" || ack.status === "duplicate")));
+      if (accepted.length) await afterAcknowledged?.(accepted);
       const next = eventBatch(current);
       if (next.length && next.every((event, index) => event.id === events[index]?.id)) return;
     }
   } catch { /* Offline/uncertain delivery retains original events. */ }
   finally { flushing.delete(userId); }
+  })();
+  flushing.set(userId, work); return work;
 }

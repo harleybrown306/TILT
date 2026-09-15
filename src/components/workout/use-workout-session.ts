@@ -16,7 +16,24 @@ export function useWorkoutSession(input: Input) {
   const verifyUser = useCallback(async () => {
     const { data: { user }, error } = await supabase.auth.getUser(); return error ? null : user?.id ?? null;
   }, [supabase]);
-  const flush = useCallback(() => flushEvents(input.userId, verifyUser), [input.userId, verifyUser]);
+  const register = useCallback(async (attemptId: string) => {
+    const { error } = await supabase.rpc("register_my_workout_session_attempt", { p_attempt_id: attemptId, p_session_id: input.sessionId });
+    if (error) throw error;
+  }, [supabase, input.sessionId]);
+  const flush = useCallback(() => flushEvents(input.userId, verifyUser, async (events) => {
+    for (const event of events) if (event.event_type === "workout_started") {
+      try { await register(event.attempt_id); } catch { setWarning("Workout start telemetry was saved, but attempt registration needs retry."); }
+    }
+  }), [input.userId, verifyUser, register]);
+  const finalizeAttempt = useCallback(async () => {
+    const cp = current.current; if (!cp?.finalized) return;
+    await flush();
+    const { data, error: eventError } = await supabase.from("workout_session_events").select("id")
+      .eq("session_id", input.sessionId).eq("attempt_id", cp.attemptId).eq("event_type", "workout_completed").limit(1);
+    if (eventError || !data?.length) throw new Error("Workout completion telemetry is not persisted yet.");
+    const { error } = await supabase.rpc("finalize_my_workout_session_attempt", { p_attempt_id: cp.attemptId });
+    if (error) throw error;
+  }, [flush, supabase, input.sessionId]);
   function now() {
     const anchor = clock.current;
     const mono = Math.max(0, performance.now() - anchor.performance);
@@ -66,12 +83,18 @@ export function useWorkoutSession(input: Input) {
             saveChange(bundle, changeAttempt(cp, "recover", recoveryNow(cp, Date.now()), crypto.randomUUID.bind(crypto), false), Date.now());
           }
         });
-        if (!cancelled && activeUser.current === input.userId && bundle.checkpoints[input.sessionId]) publish(bundle.checkpoints[input.sessionId]);
+        const recovered = bundle.checkpoints[input.sessionId];
+        if (!cancelled && activeUser.current === input.userId && recovered) {
+          publish(recovered);
+          const { data, error } = await supabase.from("workout_session_events").select("id")
+            .eq("session_id", input.sessionId).eq("attempt_id", recovered.attemptId).eq("event_type", "workout_started").limit(1);
+          if (!error && data?.length) { try { await register(recovered.attemptId); } catch { setWarning("Workout start telemetry was saved, but attempt registration needs retry."); } }
+        }
       } catch { if (!cancelled) setWarning("Unable to load same-device workout recovery. Check browser storage and retry."); }
       finally { if (!cancelled) { setReady(true); void flush(); } }
     })();
     return () => { cancelled = true; };
-  }, [input.sessionId, input.userId, publish, verifyUser, flush]);
+  }, [input.sessionId, input.userId, publish, verifyUser, flush, register, supabase]);
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       activeUser.current = session?.user.id ?? "";
@@ -92,5 +115,5 @@ export function useWorkoutSession(input: Input) {
     const delivery = window.setInterval(() => { void flush(); }, 30000);
     return () => { document.removeEventListener("visibilitychange", visibility); window.removeEventListener("online", online); clearInterval(timer); clearInterval(delivery); };
   }, [run, flush]);
-  return { checkpoint, ready, warning, run, flush };
+  return { checkpoint, ready, warning, run, flush, finalizeAttempt };
 }

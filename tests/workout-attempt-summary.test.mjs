@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import ts from "typescript";
+import vm from "node:vm";
+const compiled=ts.transpileModule(readFileSync(new URL("../src/lib/workout-attempt-summary.ts",import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS}}).outputText;
+const runtime={exports:{}};new vm.Script(`(function(module,exports){${compiled}})`).runInThisContext()(runtime,runtime.exports);
+const {summarizeWorkoutAttempt}=runtime.exports;
+const id="00000000-0000-4000-8000-000000000001", attempt="00000000-0000-4000-8000-000000000002";
+const p={schemaVersion:1,prescribedWorkMs:1000,prescribedRestMs:500,prescribedTotalMs:1500,steps:[{workoutExerciseId:id,position:0,workMs:1000,restMs:500}]};
+const e=(sequence,event_type,phase,elapsed_ms,extra={})=>({id:`00000000-0000-4000-8000-${String(sequence+10).padStart(12,"0")}`,session_id:id,attempt_id:attempt,sequence,event_type,phase,elapsed_ms,occurred_at:"2026-09-14T18:00:00.000Z",workout_exercise_id:null,step_position:null,phase_duration_ms:null,phase_elapsed_ms:null,...extra});
+const step=(sequence,event_type,phase,elapsed_ms,phase_elapsed_ms)=>e(sequence,event_type,phase,elapsed_ms,{workout_exercise_id:id,step_position:0,phase_duration_ms:phase==="work"?1000:500,phase_elapsed_ms});
+test("clean completion defers recovery-sensitive phase progression",()=>{const x=summarizeWorkoutAttempt(p,[e(0,"workout_started","ready",0),step(1,"exercise_started","work",0,0),step(2,"exercise_completed","work",1000,1000),step(3,"rest_completed","rest",1500,500),e(4,"workout_completed","finished",1500)],true);assert.equal(x.quality,"complete");assert.equal(x.workTimerProgressedMs,null);assert.equal(x.restTimerProgressedMs,null);assert.equal(x.completedWorkBlocks,1)});
+test("pause visibility skip and gaps remain conservative",()=>{const x=summarizeWorkoutAttempt(p,[e(0,"workout_started","ready",0),step(1,"exercise_started","work",0,0),e(2,"timer_paused","work",200,{workout_exercise_id:id,step_position:0,phase_duration_ms:1000,phase_elapsed_ms:200}),e(3,"timer_resumed","work",400,{workout_exercise_id:id,step_position:0,phase_duration_ms:1000,phase_elapsed_ms:200}),e(4,"page_hidden","work",400,{workout_exercise_id:id,step_position:0,phase_duration_ms:1000,phase_elapsed_ms:200}),e(5,"page_visible","work",600,{workout_exercise_id:id,step_position:0,phase_duration_ms:1000,phase_elapsed_ms:400}),step(6,"exercise_skipped","work",700,500),e(7,"workout_completed","finished",700)],true);assert.equal(x.explicitPauseMs,200);assert.equal(x.hiddenMs,200);assert.equal(x.skippedWorkBlocks,1)});
+test("missing boundaries invalid step and duplicates never become complete",()=>{const x=summarizeWorkoutAttempt(p,[step(0,"exercise_started","work",0,0),step(2,"exercise_completed","work",10,10)],false);assert.notEqual(x.quality,"complete");assert.ok(x.issues.includes("missing_workout_start"));assert.ok(x.issues.includes("sequence_gap"));});
