@@ -1,3 +1,5 @@
+import type { ExerciseAdherenceInput } from "./exercise-adherence";
+
 export const TEAM_TIME_ZONE = "America/Chicago";
 
 export type AttendanceStatus =
@@ -16,6 +18,7 @@ export type AttendanceSession = {
   workoutName: string;
   completedAt: string | null;
   prescribedWorkMs: number | null;
+  exerciseAdherenceInput?: ExerciseAdherenceInput;
 };
 
 export function localDate(date: Date, timeZone = TEAM_TIME_ZONE) {

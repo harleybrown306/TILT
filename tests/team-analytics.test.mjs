@@ -22,7 +22,7 @@ test("windows and daily trend stay team-session scoped and include empty dates",
   const trend = analytics.teamTrend([session("a", "one", "2026-08-16", "completed", 60_000)], today, 30);
   assert.equal(trend.length, 30); assert.equal(trend[0].prescribedWorkMs, 60_000); assert.equal(trend.at(-1).prescribedWorkMs, 0);
 });
-test("analytics route uses the shared guarded team loader without telemetry", () => {
+test("analytics route uses the shared guarded team loader with descriptive adherence and without telemetry", () => {
   const page = readFileSync(new URL("../src/app/teams/[teamId]/analytics/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /loadTeamAttendance/); assert.match(page, /teamAnalytics/); assert.doesNotMatch(page, /workout_session_events|active_minutes|exercises_completed|Exercise Adherence/);
+  assert.match(page, /loadTeamAttendance/); assert.match(page, /teamAnalytics/); assert.match(page, /aggregateExerciseAdherence/); assert.doesNotMatch(page, /workout_session_events|active_minutes|exercises_completed/);
 });

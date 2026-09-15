@@ -1,5 +1,10 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
+import {
+  athleteExerciseAdherenceInput,
+  type AthleteAdherenceAttemptRow,
+} from "@/lib/athlete-exercise-adherence";
+import { calculateExerciseAdherence, type ExerciseAdherence } from "@/lib/exercise-adherence";
 import { createClient } from "@/lib/supabase/server";
 
 type PageProps = {
@@ -19,11 +24,44 @@ type Workout = {
   name: string;
 };
 
+type Related<T> = T | T[] | null;
+
+type Result = {
+  id: string;
+  training_session_id: string;
+  athlete_user_id: string;
+};
+
+type Prescription = {
+  schema_version: number;
+  step_count: number;
+};
+
+type Attempt = {
+  workout_result_id: string | null;
+  training_session_id: string;
+  athlete_user_id: string;
+  finalization_state: string;
+  measurement_version: number;
+  measurement_quality: string;
+  prescribed_step_count: number;
+  completed_work_blocks: number;
+  skipped_work_blocks: number;
+};
+
 type TrainingSession = {
   id: string;
+  athlete_user_id: string;
   scheduled_date: string;
   status: string;
-  workouts: Workout | Workout[] | null;
+  workouts: Related<Workout>;
+  workout_results: Related<Result>;
+  workout_session_attempts: Related<Attempt>;
+  training_session_prescriptions: Related<Prescription>;
+};
+
+type TrainingSessionWithAdherence = TrainingSession & {
+  exerciseAdherence: ExerciseAdherence;
 };
 
 function getOne<T>(value: T | T[] | null): T | null {
@@ -101,11 +139,32 @@ export default async function AthleteDetailPage({
       .from("training_sessions")
       .select(`
         id,
+        athlete_user_id,
         scheduled_date,
         status,
         workouts (
           id,
           name
+        ),
+        workout_results (
+          id,
+          training_session_id,
+          athlete_user_id
+        ),
+        workout_session_attempts (
+          workout_result_id,
+          training_session_id,
+          athlete_user_id,
+          finalization_state,
+          measurement_version,
+          measurement_quality,
+          prescribed_step_count,
+          completed_work_blocks,
+          skipped_work_blocks
+        ),
+        training_session_prescriptions (
+          schema_version,
+          step_count
         )
       `)
       .eq("team_id", teamId)
@@ -132,7 +191,49 @@ export default async function AthleteDetailPage({
     athleteMembership.profiles as Profile | Profile[] | null
   );
 
-  const athleteSessions = (sessions ?? []) as TrainingSession[];
+  const athleteSessions: TrainingSessionWithAdherence[] = ((sessions ?? []) as TrainingSession[]).map((session) => {
+    const result = getOne(session.workout_results);
+    const prescription = getOne(session.training_session_prescriptions);
+    const attempts = Array.isArray(session.workout_session_attempts)
+      ? session.workout_session_attempts
+      : session.workout_session_attempts
+        ? [session.workout_session_attempts]
+        : [];
+    const adherenceInput = athleteExerciseAdherenceInput({
+      sessionId: session.id,
+      athleteUserId: session.athlete_user_id,
+      result: result
+        ? {
+            id: result.id,
+            trainingSessionId: result.training_session_id,
+            athleteUserId: result.athlete_user_id,
+          }
+        : null,
+      attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
+        workoutResultId: attempt.workout_result_id,
+        trainingSessionId: attempt.training_session_id,
+        athleteUserId: attempt.athlete_user_id,
+        finalizationState: attempt.finalization_state,
+        measurementVersion: attempt.measurement_version,
+        measurementQuality: attempt.measurement_quality,
+        prescribedStepCount: attempt.prescribed_step_count,
+        completedWorkBlocks: attempt.completed_work_blocks,
+        skippedWorkBlocks: attempt.skipped_work_blocks,
+      })),
+      prescription: prescription
+        ? {
+            sessionId: session.id,
+            schemaVersion: prescription.schema_version,
+            stepCount: prescription.step_count,
+          }
+        : null,
+    });
+
+    return {
+      ...session,
+      exerciseAdherence: calculateExerciseAdherence(adherenceInput),
+    };
+  });
 
   const scheduledSessions = athleteSessions.filter(
     (session) => session.status !== "completed"
@@ -255,6 +356,13 @@ export default async function AthleteDetailPage({
                         <h3 className="mt-3 text-xl font-semibold">
                           {workout?.name ?? "Assigned workout"}
                         </h3>
+                        {session.status === "completed" && (
+                          <p className="mt-2 text-sm text-slate-400">
+                            {session.exerciseAdherence.available
+                              ? `Exercise adherence: ${session.exerciseAdherence.completedBlocks} of ${session.exerciseAdherence.prescribedBlocks} prescribed work blocks completed (${Math.round(session.exerciseAdherence.percentage)}%)`
+                              : "Exercise adherence: N/A"}
+                          </p>
+                        )}
                       </div>
 
                       <Link

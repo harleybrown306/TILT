@@ -1,4 +1,5 @@
 import { localDate, shiftDate } from "./team-attendance";
+import type { ExerciseAdherence, ExerciseAdherenceInput } from "./exercise-adherence";
 
 export type AthleteDashboardSession = {
   id: string;
@@ -10,6 +11,8 @@ export type AthleteDashboardSession = {
   completedAt: string | null;
   prescribedWorkMs: number | null;
   prescribedTotalMs: number | null;
+  exerciseAdherence?: ExerciseAdherence;
+  exerciseAdherenceInput?: ExerciseAdherenceInput;
 };
 
 export function isCompleted(session: AthleteDashboardSession) {

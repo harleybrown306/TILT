@@ -8,7 +8,16 @@ import {
   isCompleted,
   type AthleteDashboardSession,
 } from "@/lib/athlete-dashboard";
-import { attendanceStatus, formatScheduledDate, localDate } from "@/lib/team-attendance";
+import {
+  athleteExerciseAdherenceInput,
+  type AthleteAdherenceAttemptRow,
+} from "@/lib/athlete-exercise-adherence";
+import {
+  aggregateExerciseAdherence,
+  calculateExerciseAdherence,
+  type ExerciseAdherence,
+} from "@/lib/exercise-adherence";
+import { attendanceStatus, formatScheduledDate, localDate, shiftDate } from "@/lib/team-attendance";
 import { createClient } from "@/lib/supabase/server";
 
 type Team = { id: string; name: string };
@@ -19,20 +28,45 @@ type Membership = {
   teams: Team | Team[] | null;
 };
 type Related<T> = T | T[] | null;
-type Result = { completed_at: string };
+type Result = {
+  id: string;
+  training_session_id: string;
+  athlete_user_id: string;
+  completed_at: string;
+};
 type Prescription = {
   workout_name: string;
   prescribed_work_ms: number;
   prescribed_total_ms: number;
+  schema_version: number;
+  step_count: number;
+};
+type Attempt = {
+  workout_result_id: string | null;
+  training_session_id: string;
+  athlete_user_id: string;
+  finalization_state: string;
+  measurement_version: number;
+  measurement_quality: string;
+  prescribed_step_count: number;
+  completed_work_blocks: number;
+  skipped_work_blocks: number;
 };
 type SessionRow = {
   id: string;
   team_id: string;
+  athlete_user_id: string;
   scheduled_date: string;
   status: string;
   teams: Related<Team>;
   training_session_prescriptions: Related<Prescription>;
   workout_results: Related<Result>;
+  workout_session_attempts: Related<Attempt>;
+};
+
+type AthleteDashboardSessionWithAdherence = AthleteDashboardSession & {
+  exerciseAdherence: ExerciseAdherence;
+  exerciseAdherenceInput: ReturnType<typeof athleteExerciseAdherenceInput>;
 };
 
 function one<T>(value: Related<T>): T | null {
@@ -72,7 +106,7 @@ function TrainingCard({
   today,
   recent = false,
 }: {
-  session: AthleteDashboardSession;
+  session: AthleteDashboardSessionWithAdherence;
   today: string;
   recent?: boolean;
 }) {
@@ -92,20 +126,27 @@ function TrainingCard({
         <h3 className="mt-3 text-xl font-semibold">{session.workoutName}</h3>
         <p className="mt-1 text-sm text-slate-400">{session.teamName}</p>
         {recent && (
-          <p className="mt-2 text-sm text-slate-400">
-            {prescribedMinutes === null
-              ? "Prescribed minutes unavailable for this session."
-              : `${prescribedMinutes} prescribed work min`}
-            {session.completedAt
-              ? ` · Completed ${new Intl.DateTimeFormat("en-US", {
-                  timeZone: "America/Chicago",
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                }).format(new Date(session.completedAt))}`
-              : ""}
-          </p>
+          <>
+            <p className="mt-2 text-sm text-slate-400">
+              {prescribedMinutes === null
+                ? "Prescribed minutes unavailable for this session."
+                : `${prescribedMinutes} prescribed work min`}
+              {session.completedAt
+                ? ` · Completed ${new Intl.DateTimeFormat("en-US", {
+                    timeZone: "America/Chicago",
+                    month: "short",
+                    day: "numeric",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  }).format(new Date(session.completedAt))}`
+                : ""}
+            </p>
+            <p className="mt-2 text-sm text-slate-400">
+              {session.exerciseAdherence.available
+                ? `Exercise adherence: ${session.exerciseAdherence.completedBlocks} of ${session.exerciseAdherence.prescribedBlocks} prescribed work blocks completed (${Math.round(session.exerciseAdherence.percentage)}%)`
+                : "Exercise adherence: N/A"}
+            </p>
+          </>
         )}
       </div>
       <Link
@@ -153,7 +194,7 @@ export default async function HomePage() {
     supabase
       .from("training_sessions")
       .select(
-        "id,team_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms),workout_results(completed_at)"
+        "id,team_id,athlete_user_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
       .eq("athlete_user_id", user.id)
       .order("scheduled_date", { ascending: true })
@@ -168,10 +209,45 @@ export default async function HomePage() {
   const coachMemberships = teamMemberships.filter(
     (membership) => membership.role === "coach" || membership.role === "assistant_coach"
   );
-  const sessions: AthleteDashboardSession[] = ((rows ?? []) as SessionRow[]).map((row) => {
+  const sessions: AthleteDashboardSessionWithAdherence[] = ((rows ?? []) as SessionRow[]).map((row) => {
     const team = one(row.teams);
     const prescription = one(row.training_session_prescriptions);
     const result = one(row.workout_results);
+    const attempts = Array.isArray(row.workout_session_attempts)
+      ? row.workout_session_attempts
+      : row.workout_session_attempts
+        ? [row.workout_session_attempts]
+        : [];
+    const adherenceSource = {
+      sessionId: row.id,
+      athleteUserId: row.athlete_user_id,
+      result: result
+        ? {
+            id: result.id,
+            trainingSessionId: result.training_session_id,
+            athleteUserId: result.athlete_user_id,
+          }
+        : null,
+      attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
+        workoutResultId: attempt.workout_result_id,
+        trainingSessionId: attempt.training_session_id,
+        athleteUserId: attempt.athlete_user_id,
+        finalizationState: attempt.finalization_state,
+        measurementVersion: attempt.measurement_version,
+        measurementQuality: attempt.measurement_quality,
+        prescribedStepCount: attempt.prescribed_step_count,
+        completedWorkBlocks: attempt.completed_work_blocks,
+        skippedWorkBlocks: attempt.skipped_work_blocks,
+      })),
+      prescription: prescription
+        ? {
+            sessionId: row.id,
+            schemaVersion: prescription.schema_version,
+            stepCount: prescription.step_count,
+          }
+        : null,
+    };
+    const adherenceInput = athleteExerciseAdherenceInput(adherenceSource);
 
     return {
       id: row.id,
@@ -183,6 +259,8 @@ export default async function HomePage() {
       completedAt: result?.completed_at ?? null,
       prescribedWorkMs: prescription?.prescribed_work_ms ?? null,
       prescribedTotalMs: prescription?.prescribed_total_ms ?? null,
+      exerciseAdherence: calculateExerciseAdherence(adherenceInput),
+      exerciseAdherenceInput: adherenceInput,
     };
   });
   const today = localDate(new Date());
@@ -200,6 +278,16 @@ export default async function HomePage() {
     })
     .slice(0, 5);
   const chart = activityBuckets(sessions, today);
+  const weeklyExerciseAdherence = aggregateExerciseAdherence(
+    sessions
+      .filter(
+        (session) =>
+          isCompleted(session) &&
+          session.scheduledDate <= today &&
+          session.scheduledDate >= shiftDate(today, -6)
+      )
+      .map((session) => session.exerciseAdherenceInput)
+  );
   const chartMax = Math.max(...chart.map((bucket) => bucket.workMs), 1);
   const displayName = profile?.full_name || user.email || "TILT User";
 
@@ -242,12 +330,21 @@ export default async function HomePage() {
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Time summary</p>
               <h2 className="mt-1 text-2xl font-semibold">Your training time</h2>
               <p className="mt-1 text-sm text-slate-400">Minutes are completed prescribed work, not measured physical activity.</p>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
                 <Metric label="Weekly Prescribed Minutes" value={displayMinutes(metrics.weeklyWorkMs)} detail="Rolling 7 local dates" />
                 <Metric label="Monthly Prescribed Minutes" value={displayMinutes(metrics.monthlyWorkMs)} detail="Current local calendar month" />
                 <Metric label="Completed Workouts" value={metrics.totalCompletedWorkouts} />
                 <Metric label="Training Days" value={metrics.trainingDays} detail="Distinct scheduled completion dates" />
                 <Metric label="Current Training Streak" value={`${metrics.currentStreak} days`} detail="Consecutive training days" />
+                <Metric
+                  label="Exercise Adherence"
+                  value={weeklyExerciseAdherence.available
+                    ? `${weeklyExerciseAdherence.completedBlocks} of ${weeklyExerciseAdherence.prescribedBlocks} blocks • ${Math.round(weeklyExerciseAdherence.percentage)}%`
+                    : "N/A"}
+                  detail={weeklyExerciseAdherence.available
+                    ? `${weeklyExerciseAdherence.eligibleSessionCount} eligible of ${weeklyExerciseAdherence.eligibleSessionCount + weeklyExerciseAdherence.unavailableSessionCount} completed workouts in 7 days`
+                    : "No eligible completed workouts in 7 days"}
+                />
               </div>
             </section>
 

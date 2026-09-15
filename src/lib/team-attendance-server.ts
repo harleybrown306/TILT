@@ -1,13 +1,38 @@
 import "server-only";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import {
+  athleteExerciseAdherenceInput,
+  type AthleteAdherenceAttemptRow,
+} from "./athlete-exercise-adherence";
 import type { AttendanceSession } from "./team-attendance";
 
 type Related<T> = T | T[] | null;
 type Profile = { full_name: string | null };
 type Member = { user_id: string; profiles: Related<Profile> };
-type Result = { completed_at: string };
-type Snapshot = { workout_name: string; prescribed_work_ms: number };
+type Result = {
+  id: string;
+  training_session_id: string;
+  athlete_user_id: string;
+  completed_at: string;
+};
+type Snapshot = {
+  workout_name: string;
+  prescribed_work_ms: number;
+  schema_version: number;
+  step_count: number;
+};
+type Attempt = {
+  workout_result_id: string | null;
+  training_session_id: string;
+  athlete_user_id: string;
+  finalization_state: string;
+  measurement_version: number;
+  measurement_quality: string;
+  prescribed_step_count: number;
+  completed_work_blocks: number;
+  skipped_work_blocks: number;
+};
 type Workout = { name: string };
 type Session = {
   id: string;
@@ -17,6 +42,7 @@ type Session = {
   workouts: Related<Workout>;
   training_session_prescriptions: Related<Snapshot>;
   workout_results: Related<Result>;
+  workout_session_attempts: Related<Attempt>;
 };
 
 function one<T>(value: Related<T>): T | null {
@@ -63,7 +89,7 @@ export async function loadTeamAttendance(teamId: string) {
     supabase
       .from("training_sessions")
       .select(
-        "id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms),workout_results(completed_at)"
+        "id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
       .eq("team_id", teamId)
       .order("scheduled_date", { ascending: true })
@@ -86,6 +112,40 @@ export async function loadTeamAttendance(teamId: string) {
     const result = one(session.workout_results);
     const snapshot = one(session.training_session_prescriptions);
     const workout = one(session.workouts);
+    const attempts = Array.isArray(session.workout_session_attempts)
+      ? session.workout_session_attempts
+      : session.workout_session_attempts
+        ? [session.workout_session_attempts]
+        : [];
+    const exerciseAdherenceInput = athleteExerciseAdherenceInput({
+      sessionId: session.id,
+      athleteUserId: session.athlete_user_id,
+      result: result
+        ? {
+            id: result.id,
+            trainingSessionId: result.training_session_id,
+            athleteUserId: result.athlete_user_id,
+          }
+        : null,
+      attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
+        workoutResultId: attempt.workout_result_id,
+        trainingSessionId: attempt.training_session_id,
+        athleteUserId: attempt.athlete_user_id,
+        finalizationState: attempt.finalization_state,
+        measurementVersion: attempt.measurement_version,
+        measurementQuality: attempt.measurement_quality,
+        prescribedStepCount: attempt.prescribed_step_count,
+        completedWorkBlocks: attempt.completed_work_blocks,
+        skippedWorkBlocks: attempt.skipped_work_blocks,
+      })),
+      prescription: snapshot
+        ? {
+            sessionId: session.id,
+            schemaVersion: snapshot.schema_version,
+            stepCount: snapshot.step_count,
+          }
+        : null,
+    });
 
     return {
       id: session.id,
@@ -96,6 +156,7 @@ export async function loadTeamAttendance(teamId: string) {
       workoutName: snapshot?.workout_name ?? workout?.name ?? "Assigned workout",
       completedAt: result?.completed_at ?? null,
       prescribedWorkMs: snapshot?.prescribed_work_ms ?? null,
+      exerciseAdherenceInput,
     };
   });
 

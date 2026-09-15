@@ -84,8 +84,16 @@ function setup(options = {}) {
     "@/components/sign-out-button": { default: () => null },
     "@/lib/team-attendance": {
       localDate: () => "2026-09-14",
+      shiftDate: (date) => date,
       formatScheduledDate: (date) => date,
       attendanceStatus: (session, today) => session.completedAt || session.storedStatus === "completed" ? "completed" : session.scheduledDate > today ? "upcoming" : "pending",
+    },
+    "@/lib/athlete-exercise-adherence": {
+      athleteExerciseAdherenceInput: () => ({ result: null, attempt: null, prescription: null }),
+    },
+    "@/lib/exercise-adherence": {
+      calculateExerciseAdherence: () => ({ available: false, completedBlocks: null, prescribedBlocks: null, skippedBlocks: null, ratio: null, percentage: null }),
+      aggregateExerciseAdherence: () => ({ available: false, completedBlocks: 0, prescribedBlocks: 0, skippedBlocks: 0, eligibleSessionCount: 0, unavailableSessionCount: 0, ratio: null, percentage: null }),
     },
     "@/lib/athlete-dashboard": {
       isCompleted: (session) => session.status === "completed" || Boolean(session.completedAt),
