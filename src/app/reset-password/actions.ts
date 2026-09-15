@@ -1,6 +1,7 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { ResetPasswordState } from "./reset-password-state";
 
@@ -20,5 +21,5 @@ export async function resetPassword(_: ResetPasswordState, formData: FormData): 
   const { error } = await supabase.auth.updateUser({ password });
   if (error) return { status: "error", message: "We could not update your password. Request a new reset link and try again." };
   cookieStore.delete("tilt_password_recovery");
-  return { status: "success", message: "Your password has been updated." };
+  redirect("/reset-password/success");
 }

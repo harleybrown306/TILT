@@ -99,3 +99,38 @@ test("reset page keeps recovery intent insufficient without an authenticated use
   const page = readFileSync(root + "src/app/reset-password/page.tsx", "utf8");
   assert.match(page, /if \(!user \|\| cookieStore\.get\("tilt_password_recovery"\)/);
 });
+
+function loadResetAction({ recoveryIntent = true, user = { id: "user" } } = {}) {
+  const deleted = [];
+  const updates = [];
+  const action = load("src/app/reset-password/actions.ts", {
+    "next/headers": { cookies: async () => ({ get: () => recoveryIntent ? { value: "1" } : undefined, delete: (name) => deleted.push(name) }) },
+    "next/navigation": { redirect: (destination) => { throw Error(`REDIRECT:${destination}`); } },
+    "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user }, error: null }), updateUser: async (attributes) => { updates.push(attributes); return { error: null }; } } }) },
+  }).resetPassword;
+  return { action, deleted, updates };
+}
+
+test("successful password reset clears recovery intent and redirects to its success route", async () => {
+  const { action, deleted, updates } = loadResetAction();
+  const form = new FormData(); form.set("password", "new-password"); form.set("confirmation", "new-password");
+  await assert.rejects(action({ status: "idle", message: "" }, form), /REDIRECT:\/reset-password\/success/);
+  assert.deepEqual(updates, [{ password: "new-password" }]);
+  assert.deepEqual(deleted, ["tilt_password_recovery"]);
+});
+
+test("reset action still rejects missing recovery intent and missing authenticated user", async () => {
+  const form = new FormData(); form.set("password", "new-password"); form.set("confirmation", "new-password");
+  for (const options of [{ recoveryIntent: false }, { user: null }]) {
+    const { action, deleted, updates } = loadResetAction(options);
+    const result = await action({ status: "idle", message: "" }, form);
+    assert.equal(result.status, "error"); assert.equal(updates.length, 0); assert.equal(deleted.length, 0);
+  }
+});
+
+test("password-reset success route is independent of recovery intent", () => {
+  const success = readFileSync(root + "src/app/reset-password/success/page.tsx", "utf8");
+  assert.match(success, /Password updated successfully/);
+  assert.match(success, /href="\/"/);
+  assert.doesNotMatch(success, /tilt_password_recovery|createClient|cookies/);
+});
