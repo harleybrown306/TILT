@@ -3,7 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { safeInvitationDestination } from "@/lib/team-invitations";
+import { authPath, safeAuthContinuation } from "@/lib/auth-continuation";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -11,7 +11,11 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [error, setError] = useState(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("auth") === "error"
+      ? "We could not complete authentication. Try again or request a new link."
+      : ""
+  );
   const [loading, setLoading] = useState(false);
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -30,7 +34,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push(safeInvitationDestination(new URLSearchParams(window.location.search).get("next")));
+    router.push(safeAuthContinuation(new URLSearchParams(window.location.search).get("next")));
     router.refresh();
   }
 
@@ -49,7 +53,7 @@ export default function LoginPage() {
           <p className="mt-2 text-sm text-slate-400">
             Access your training, teams, workouts, and progress.
           </p>
-          <p className="mt-3 text-sm text-slate-400">Invitation recipients must sign in with the account associated with their invitation. Account creation is not available here yet.</p>
+          <p className="mt-3 text-sm text-slate-400">Invitation recipients must use the account associated with their invitation.</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-5">
@@ -71,6 +75,12 @@ export default function LoginPage() {
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-emerald-500"
               placeholder="you@example.com"
             />
+          </div>
+
+          <div className="flex justify-end">
+            <a href={authPath("/forgot-password", new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("next"))} className="text-sm text-emerald-400 hover:text-emerald-300">
+              Forgot password?
+            </a>
           </div>
 
           <div>
@@ -107,6 +117,10 @@ export default function LoginPage() {
             {loading ? "Signing in..." : "Sign in"}
           </button>
         </form>
+        <p className="mt-6 text-center text-sm text-slate-400">
+          Need an account?{" "}
+          <a href={authPath("/signup", new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("next"))} className="font-medium text-emerald-400 hover:text-emerald-300">Create account</a>
+        </p>
       </div>
     </main>
   );

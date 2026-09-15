@@ -261,7 +261,7 @@ test("login submits credentials and returns to the preserved invitation", async 
   try {
     let cursor = 0;
     const component = loadTs("src/app/login/page.tsx", {
-      "@/lib/team-invitations": logic,
+      "@/lib/auth-continuation": loadTs("src/lib/auth-continuation.ts"),
       "@/lib/supabase/client": { createClient: () => ({ auth: { signInWithPassword: async ({ email, password }) => { assert.equal(email, "athlete@example.com"); assert.equal(password, "test-password"); return { error: null }; } } }) },
       "next/navigation": { useRouter: () => ({ push: (path) => pushed.push(path), refresh() {} }) },
       react: { ...React, useState: () => [["athlete@example.com", "test-password", "", false][cursor++], () => {}] },
