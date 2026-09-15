@@ -2,7 +2,8 @@
 
 import { useActionState } from "react";
 import { useRouter } from "next/navigation";
-import { initialResetPasswordState, resetPassword } from "./actions";
+import { resetPassword } from "./actions";
+import { initialResetPasswordState } from "./reset-password-state";
 
 export default function ResetPasswordForm() {
   const router = useRouter();

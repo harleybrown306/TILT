@@ -52,3 +52,10 @@ test("recovery uses callback reset destination and neutral success language", ()
   assert.match(reset, /auth\.updateUser\(\{ password \}\)/);
   assert.match(reset, /password !== confirmation/);
 });
+
+test("server action modules export only async functions", () => {
+  const actions = readFileSync(root + "src/app/reset-password/actions.ts", "utf8");
+  assert.match(actions, /^"use server";/);
+  assert.match(actions, /export async function resetPassword/);
+  assert.doesNotMatch(actions, /^export\s+(?:const|let|type|class|interface)\b/m);
+});

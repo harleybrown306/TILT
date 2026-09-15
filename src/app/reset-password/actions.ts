@@ -2,9 +2,7 @@
 
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-
-export type ResetPasswordState = { status: "idle" | "error" | "success"; message: string };
-export const initialResetPasswordState: ResetPasswordState = { status: "idle", message: "" };
+import type { ResetPasswordState } from "./reset-password-state";
 
 export async function resetPassword(_: ResetPasswordState, formData: FormData): Promise<ResetPasswordState> {
   const cookieStore = await cookies();
