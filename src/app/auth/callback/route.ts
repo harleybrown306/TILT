@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { createServerClient } from "@supabase/ssr";
 import { safeAuthContinuation } from "@/lib/auth-continuation";
-import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -8,7 +9,20 @@ export async function GET(request: Request) {
   const destination = safeAuthContinuation(url.searchParams.get("next"));
   if (!code) return NextResponse.redirect(new URL("/login?auth=error", url.origin));
 
-  const supabase = await createClient();
+  const cookieStore = await cookies();
+  const exchangedCookies: Array<{ name: string; value: string; options: Parameters<typeof cookieStore.set>[2] }> = [];
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+    {
+      cookies: {
+        getAll: () => cookieStore.getAll(),
+        setAll: (cookiesToSet) => {
+          exchangedCookies.push(...cookiesToSet);
+        },
+      },
+    }
+  );
   const { data, error } = await supabase.auth.exchangeCodeForSession(code);
   if (error) return NextResponse.redirect(new URL("/login?auth=error", url.origin));
   // auth-js preserves the recovery redirect type in the PKCE verifier and returns it
@@ -18,6 +32,7 @@ export async function GET(request: Request) {
     return NextResponse.redirect(new URL("/login?auth=error", url.origin));
   }
   const response = NextResponse.redirect(new URL(destination, url.origin));
+  exchangedCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
   if (redirectType === "recovery") {
     response.cookies.set("tilt_password_recovery", "1", {
       httpOnly: true,

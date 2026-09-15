@@ -8,10 +8,10 @@ import ts from "typescript";
 
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL("../", import.meta.url));
-function load(path) {
+function load(path, mocks = {}) {
   const source = ts.transpileModule(readFileSync(root + path, "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2017, module: ts.ModuleKind.CommonJS } }).outputText;
   const loaded = { exports: {} };
-  new vm.Script(`(function(require, module, exports) {${source}\n})`).runInThisContext()((name) => require(name), loaded, loaded.exports);
+  new vm.Script(`(function(require, module, exports) {${source}\n})`).runInThisContext()((name) => name in mocks ? mocks[name] : require(name), loaded, loaded.exports);
   return loaded.exports;
 }
 const auth = load("src/lib/auth-continuation.ts");
@@ -58,4 +58,44 @@ test("server action modules export only async functions", () => {
   assert.match(actions, /^"use server";/);
   assert.match(actions, /export async function resetPassword/);
   assert.doesNotMatch(actions, /^export\s+(?:const|let|type|class|interface)\b/m);
+});
+
+function loadCallback({ redirectType, exchangedCookies = [] }) {
+  const setCookies = [];
+  const callback = load("src/app/auth/callback/route.ts", {
+    "next/headers": { cookies: async () => ({ getAll: () => [{ name: "pkce", value: "verifier" }] }) },
+    "@supabase/ssr": { createServerClient: (_url, _key, options) => ({ auth: { exchangeCodeForSession: async () => {
+      options.cookies.setAll(exchangedCookies);
+      return { data: { user: {}, session: {}, redirectType }, error: null };
+    } } }) },
+    "next/server": {
+      NextResponse: {
+        redirect: (url) => ({
+          url: String(url),
+          cookies: { set: (name, value, options) => setCookies.push({ name, value, options }) },
+        }),
+      },
+    },
+    "@/lib/auth-continuation": auth,
+  });
+  return { callback, setCookies };
+}
+
+test("recovery callback returns Supabase session cookies and recovery intent together", async () => {
+  const { callback, setCookies } = loadCallback({ redirectType: "recovery", exchangedCookies: [{ name: "sb-session", value: "session", options: { httpOnly: true } }] });
+  const response = await callback.GET(new Request("https://tilt.test/auth/callback?code=fresh&next=/reset-password"));
+  assert.equal(response.url, "https://tilt.test/reset-password");
+  assert.deepEqual(setCookies.map(({ name }) => name), ["sb-session", "tilt_password_recovery"]);
+});
+
+test("non-recovery callback cannot reach reset-password or set recovery intent", async () => {
+  const { callback, setCookies } = loadCallback({ redirectType: null });
+  const response = await callback.GET(new Request("https://tilt.test/auth/callback?code=confirmation&next=/reset-password"));
+  assert.equal(response.url, "https://tilt.test/login?auth=error");
+  assert.equal(setCookies.some(({ name }) => name === "tilt_password_recovery"), false);
+});
+
+test("reset page keeps recovery intent insufficient without an authenticated user", () => {
+  const page = readFileSync(root + "src/app/reset-password/page.tsx", "utf8");
+  assert.match(page, /if \(!user \|\| cookieStore\.get\("tilt_password_recovery"\)/);
 });
