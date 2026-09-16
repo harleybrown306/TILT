@@ -4,10 +4,11 @@ import { createClient } from "@/lib/supabase/server";
 import { readAllRows, resolveRecipientIds, type AssignmentAthlete, type AssignmentGroup } from "@/lib/training-assignment";
 import AssignmentForm from "./assignment-form";
 
-type AthleteRow = {
+type LegacyAthleteRow = {
   user_id: string;
   profiles: { full_name: string | null } | { full_name: string | null }[] | null;
 };
+type DurableRosterRow = { athlete_id: string };
 type GroupRow = { id: string; name: string };
 type GroupMemberRow = { team_group_id: string; athlete_user_id: string };
 type PlanRow = { id: string; name: string; description: string | null };
@@ -45,7 +46,7 @@ export default async function AssignTrainingPage({
     defaultStartDate: string;
   } | null = null;
   try {
-    const [plans, groups, roster] = await Promise.all([
+    const [plans, groups, legacyRoster, durableRoster] = await Promise.all([
       readAllRows<PlanRow>((from, to) => supabase
         .from("training_plans")
         .select("id, name, description")
@@ -63,11 +64,17 @@ export default async function AssignTrainingPage({
         .order("name")
         .order("id")
         .range(from, to)),
-      readAllRows<AthleteRow>((from, to) => supabase
+      readAllRows<LegacyAthleteRow>((from, to) => supabase
         .from("team_memberships")
         .select("user_id, profiles!team_memberships_user_id_fkey(full_name)")
         .eq("team_id", team.id)
         .eq("role", "athlete")
+        .order("id")
+        .range(from, to)),
+      readAllRows<DurableRosterRow>((from, to) => supabase
+        .from("team_athlete_memberships")
+        .select("athlete_id")
+        .eq("team_id", team.id)
         .order("id")
         .range(from, to)),
     ]);
@@ -78,9 +85,14 @@ export default async function AssignTrainingPage({
       .in("team_group_id", groups.map((group) => group.id))
       .order("id")
       .range(from, to)) : [];
-    const athletes = roster.map((row) => {
+    const durableAthleteIds = new Set(durableRoster.map((membership) => membership.athlete_id));
+    // Legacy roster/profile rows provide the existing display names. A recipient
+    // is emitted only from the durable roster; current legacy groups map through
+    // this same-UUID overlap until group membership receives its own cutover.
+    const athletes = legacyRoster.flatMap((row) => {
+      if (!durableAthleteIds.has(row.user_id)) return [];
       const profile = Array.isArray(row.profiles) ? row.profiles[0] : row.profiles;
-      return { id: row.user_id, name: profile?.full_name || "Unnamed athlete" };
+      return [{ athleteId: row.user_id, name: profile?.full_name || "Unnamed athlete" }];
     }).sort((a, b) => a.name.localeCompare(b.name));
     const memberIdsByGroup = new Map<string, string[]>();
     for (const member of members) {
@@ -88,7 +100,7 @@ export default async function AssignTrainingPage({
       ids.push(member.athlete_user_id);
       memberIdsByGroup.set(member.team_group_id, ids);
     }
-    const teamAthleteIds = athletes.map((athlete) => athlete.id);
+    const teamAthleteIds = athletes.map((athlete) => athlete.athleteId);
 
     const dateParts = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",

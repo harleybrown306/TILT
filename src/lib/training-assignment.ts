@@ -4,7 +4,7 @@ export type AssignmentState = {
   recipientCount?: number;
 };
 
-export type AssignmentAthlete = { id: string; name: string };
+export type AssignmentAthlete = { athleteId: string; name: string };
 export type AssignmentGroup = {
   id: string;
   name: string;

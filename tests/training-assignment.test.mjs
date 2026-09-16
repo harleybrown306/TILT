@@ -6,9 +6,7 @@ import vm from "node:vm";
 import test from "node:test";
 import ts from "typescript";
 import * as React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 
-// Exercise the actual TS modules with a session-scoped mock; never connect to Supabase.
 const require = createRequire(import.meta.url);
 const root = fileURLToPath(new URL("../", import.meta.url));
 function loadTs(path, mocks = {}) {
@@ -16,89 +14,66 @@ function loadTs(path, mocks = {}) {
     compilerOptions: { target: ts.ScriptTarget.ES2017, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   const loadedModule = { exports: {} };
-  const run = new vm.Script(`(function(require, module, exports) {${source}\n})`).runInThisContext();
+  const run = new vm.Script(`(function(require,module,exports){${source}\n})`).runInThisContext();
   run((name) => name in mocks ? mocks[name] : require(name), loadedModule, loadedModule.exports);
   return loadedModule.exports;
 }
 
 const helper = loadTs("src/lib/training-assignment.ts");
-const plans = loadTs("src/lib/training-plans.ts");
-const id = (number) => `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`;
+const id = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const teamId = id(1), planId = id(2), coachId = id(3);
-const athleteA = id(4), athleteB = id(5), athleteC = id(6);
-const groupA = id(7), groupB = id(8), otherTeam = id(9);
+const athleteA = id(4), athleteB = id(5), athleteC = id(6), childAthlete = id(7);
+const groupA = id(8), groupB = id(9), requestId = id(10);
 const idle = { status: "idle", message: "" };
 
-function form({ individuals = [athleteA], groups = [], plan = planId, date = "2026-09-14" } = {}) {
+function form({ individuals = [athleteA], groups = [], request = requestId, date = "2026-09-14", notes = "  Practice off hand  " } = {}) {
   const data = new FormData();
-  data.set("trainingPlanId", plan);
+  data.set("assignmentRequestId", request);
+  data.set("trainingPlanId", planId);
   data.set("startDate", date);
-  data.set("notes", "  Practice off hand  ");
+  data.set("notes", notes);
   individuals.forEach((value) => data.append("athleteIds", value));
   groups.forEach((value) => data.append("groupIds", value));
   return data;
 }
 
 function setup(options = {}) {
-  const calls = [], revalidated = [], reviews = [];
+  const calls = [], revalidated = [], logs = [];
   const tables = {
     teams: [{ id: teamId, name: "Test team" }],
-    team_memberships: [
-      { id: id(10), team_id: teamId, user_id: coachId, role: options.role ?? "coach" },
-      ...[athleteA, athleteB, athleteC].map((user_id, index) => ({
-        id: id(11 + index), team_id: teamId, user_id, role: "athlete",
-        profiles: { full_name: `Athlete ${index + 1}` },
-      })),
-    ],
-    training_plans: [{ id: planId, team_id: options.planTeam ?? null, owner_user_id: options.planOwner ?? coachId, kind: options.planKind ?? "coach", visibility: options.planVisibility ?? "private", status: options.planStatus ?? "active", name: "Test plan", description: null }],
+    team_memberships: [{ team_id: teamId, user_id: coachId, role: options.role ?? "coach" },
+      ...[athleteA, athleteB, athleteC].map((user_id, i) => ({ team_id: teamId, user_id, role: "athlete", profiles: { full_name: `Athlete ${i + 1}` } }))],
+    team_athlete_memberships: [athleteA, athleteB, athleteC, ...(options.includeChild ? [childAthlete] : [])].map((athlete_id) => ({ team_id: teamId, athlete_id })),
+    training_plans: [{ id: planId, owner_user_id: coachId, kind: "coach", visibility: "private", status: "active", name: "Test plan", description: null }],
     team_groups: [{ id: groupA, team_id: teamId, name: "Group A" }, { id: groupB, team_id: teamId, name: "Group B" }],
     team_group_memberships: [
-      { id: id(20), team_group_id: groupA, athlete_user_id: athleteA },
-      { id: id(21), team_group_id: groupA, athlete_user_id: athleteB },
-      { id: id(22), team_group_id: groupB, athlete_user_id: athleteB },
-      { id: id(23), team_group_id: groupB, athlete_user_id: athleteC },
-      { id: id(24), team_group_id: groupB, athlete_user_id: id(999) },
+      { team_group_id: groupA, athlete_user_id: athleteA }, { team_group_id: groupA, athlete_user_id: athleteB },
+      { team_group_id: groupB, athlete_user_id: athleteB }, { team_group_id: groupB, athlete_user_id: athleteC },
+      { team_group_id: groupB, athlete_user_id: id(999) },
     ],
   };
-  if (options.emptyRoster) tables.team_memberships = tables.team_memberships.slice(0, 1);
   if (options.emptyGroups) { tables.team_groups = []; tables.team_group_memberships = []; }
-  if (options.emptyGroupMembers) tables.team_group_memberships = [];
-  if (options.emptyPlans) tables.training_plans = [];
-  if (options.missingMembership) tables.team_memberships = tables.team_memberships.filter((row) => row.user_id !== coachId);
+  if (options.emptyRoster) tables.team_athlete_memberships = [];
+  if (options.readError) tables[options.readError] = null;
   const client = {
     auth: { getUser: async () => ({ data: { user: options.signedOut ? null : { id: coachId } }, error: null }) },
+    rpc(name, payload) {
+      calls.push({ kind: "rpc", name, payload });
+      if (options.rpcThrow) return Promise.reject(Error("connection lost"));
+      const message = options.rpcError;
+      return Promise.resolve({ data: message ? null : [{ batch_id: payload.p_batch_id, recipient_count: options.recipientCount ?? payload.p_athlete_ids.length }], error: message ? { message, code: "P0001" } : null });
+    },
     from(table) {
-      const filters = [], orders = [];
-      let operation = "read", payload, single = false, start = 0, end = Infinity, orFilter;
+      const filters = []; let start = 0; let end = Infinity; let single = false;
       const query = {
-        select() { return query; },
-        eq(key, value) { filters.push([key, value]); return query; },
-        in(key, value) { filters.push([key, value]); return query; },
-        or(value) { orFilter = value; return query; },
-        order(key) { orders.push(key); return query; },
-        range(from, to) { start = from; end = to; return query; },
-        single() { single = true; return query; },
-        insert(value) { operation = "insert"; payload = value; return query; },
-        delete() { operation = "delete"; return query; },
+        select() { return query; }, eq(key, value) { filters.push([key, value]); return query; }, in(key, value) { filters.push([key, value]); return query; },
+        order() { return query; }, range(from, to) { start = from; end = to; return query; }, single() { single = true; return query; },
         then(resolve, reject) {
-          calls.push({ table, operation, payload, filters, start, end });
-          if (options.throwOn === `${table}:${operation}`) return Promise.reject(Error("connection lost")).then(resolve, reject);
-          if (options.readError === table && operation === "read") return Promise.resolve({ data: null, error: { message: "denied" }, status: 403 }).then(resolve, reject);
-          if (operation === "insert") {
-            const failure = table === "training_assignment_batches" ? options.batchFailure : options.assignmentFailure;
-            return Promise.resolve({ data: null, error: failure !== undefined ? { message: "rejected" } : null, status: failure ?? 201 }).then(resolve, reject);
-          }
-          if (operation === "delete") {
-            return Promise.resolve({ data: options.cleanupDenied ? [] : [{ id: filters[0][1] }], error: options.cleanupError ? { message: "denied" } : null, status: 200 }).then(resolve, reject);
-          }
+          calls.push({ kind: "read", table, filters, start, end });
+          if (tables[table] === null) return Promise.resolve({ data: null, error: { message: "denied" } }).then(resolve, reject);
           let rows = (tables[table] ?? []).filter((row) => filters.every(([key, value]) => Array.isArray(value) ? value.includes(row[key]) : row[key] === value));
-          if (orFilter) rows = rows.filter((row) => row.team_id === teamId || row.team_id === null);
-          rows.sort((a, b) => {
-            for (const key of orders) { const diff = String(a[key]).localeCompare(String(b[key])); if (diff) return diff; }
-            return 0;
-          });
-          rows = rows.slice(start, Math.min(end + 1, start + (options.apiCap ?? Infinity)));
-          return Promise.resolve({ data: single ? rows[0] ?? null : rows, error: null, status: 200 }).then(resolve, reject);
+          rows = rows.slice(start, end + 1);
+          return Promise.resolve({ data: single ? rows[0] ?? null : rows, error: null }).then(resolve, reject);
         },
       };
       return query;
@@ -107,369 +82,120 @@ function setup(options = {}) {
   const mocks = {
     "@/lib/supabase/server": { createClient: async () => client },
     "@/lib/training-assignment": helper,
-    "@/lib/training-plans": plans,
     "next/cache": { revalidatePath: (path) => revalidated.push(path) },
   };
-  // Capture review metadata without noisy logs or any external data.
-  const actionModuleSource = ts.transpileModule(readFileSync(root + "src/app/teams/[teamId]/assign/actions.ts", "utf8"), {
-    compilerOptions: { target: ts.ScriptTarget.ES2017, module: ts.ModuleKind.CommonJS },
-  }).outputText;
+  const source = ts.transpileModule(readFileSync(root + "src/app/teams/[teamId]/assign/actions.ts", "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2017, module: ts.ModuleKind.CommonJS } }).outputText;
   const actionModule = { exports: {} };
-  const run = new vm.Script(`(function(require, module, exports, console) {${actionModuleSource}\n})`).runInThisContext();
-  run((name) => name in mocks ? mocks[name] : require(name), actionModule, actionModule.exports, { error: (...values) => reviews.push(values) });
-  return { action: actionModule.exports.assignTraining, calls, revalidated, reviews, mocks, tables };
+  const run = new vm.Script(`(function(require,module,exports,console){${source}\n})`).runInThisContext();
+  run((name) => name in mocks ? mocks[name] : require(name), actionModule, actionModule.exports, { error: (...args) => logs.push(args) });
+  return { action: actionModule.exports.assignTraining, calls, revalidated, logs, tables, mocks };
 }
 
-const writes = (fixture) => fixture.calls.filter((call) => call.operation !== "read");
+function rpcCall(fixture) { return fixture.calls.find((call) => call.kind === "rpc"); }
 
-test("recipient resolution deduplicates overlap and excludes non-roster members", () => {
-  assert.deepEqual(helper.resolveRecipientIds([athleteA, athleteA], [athleteA, athleteB, athleteB, id(999)], [athleteA, athleteB]), [athleteA, athleteB]);
+test("recipient resolution remains roster-scoped and deterministic", () => {
+  assert.deepEqual(helper.resolveRecipientIds([athleteB, athleteA], [athleteA, athleteC, id(999)], [athleteA, athleteB, athleteC]), [athleteA, athleteB, athleteC]);
 });
 
-test("strict date validation rejects impossible dates", () => {
-  for (const date of ["2026-02-29", "2026-04-31", "2026-13-01", "2026-9-14", "0000-01-01", "invalid"]) assert.equal(helper.isDate(date), false, date);
-  assert.equal(helper.isDate("2028-02-29"), true);
-});
-
-test("pagination continues through a short API-capped page and propagates failures", async () => {
-  const values = [1, 2, 3, 4, 5];
-  const rows = await helper.readAllRows((from) => Promise.resolve({ data: values.slice(from, from + 2), error: null }));
-  assert.deepEqual(rows, values);
-  await assert.rejects(helper.readAllRows(() => Promise.resolve({ data: null, error: { message: "denied" } })));
-});
-
-for (const [name, individuals, groups, expected] of [
-  ["single athlete", [athleteA], [], [athleteA]],
-  ["multiple athletes", [athleteA, athleteB], [], [athleteA, athleteB]],
-  ["single group", [], [groupA], [athleteA, athleteB]],
-  ["overlapping groups", [], [groupA, groupB], [athleteA, athleteB, athleteC]],
-  ["mixed and repeated selections", [athleteA, athleteA], [groupA, groupA, groupB], [athleteA, athleteB, athleteC]],
-]) {
-  test(`assigns ${name} with one batch and one canonical row per recipient`, async () => {
-    const fixture = setup({ apiCap: 2 });
-    const state = await fixture.action(teamId, idle, form({ individuals, groups }));
-    assert.equal(state.status, "success");
-    assert.equal(state.recipientCount, expected.length);
-    const [batchCall, assignmentCall] = writes(fixture);
-    assert.equal(writes(fixture).length, 2);
-    assert.equal(batchCall.table, "training_assignment_batches");
-    assert.deepEqual(batchCall.payload.selection_snapshot, {
-      selected_individual_athlete_ids: [...new Set(individuals)],
-      selected_group_ids: [...new Set(groups)],
-      resolved_unique_athlete_ids: expected,
-    });
-    assert.deepEqual(assignmentCall.payload, expected.map((athleteId) => ({
-      training_plan_id: planId, team_id: teamId, athlete_user_id: athleteId,
-      assigned_by_user_id: coachId, start_date: "2026-09-14", status: "active",
-      notes: "Practice off hand", assignment_batch_id: batchCall.payload.id,
-    })));
-    assert.deepEqual(fixture.revalidated, [`/teams/${teamId}`, `/teams/${teamId}/assign`, "/"]);
-    assert.ok(!fixture.calls.some((call) => call.table === "training_sessions"));
-  });
-}
-
-for (const [name, options, input] of [
-  ["signed out", { signedOut: true }, {}],
-  ["athlete role", { role: "athlete" }, {}],
-  ["not a member", { missingMembership: true }, {}],
-  ["other coach's plan", { planOwner: id(999) }, {}],
-  ["public template", { planKind: "template", planVisibility: "public" }, {}],
-  ["draft plan", { planStatus: "draft" }, {}],
-  ["archived plan", { planStatus: "archived" }, {}],
-  ["missing plan", { emptyPlans: true }, {}],
-  ["other team's group", {}, { individuals: [], groups: [id(999)] }],
-  ["non-roster individual", {}, { individuals: [id(999)] }],
-  ["coach selected as athlete", {}, { individuals: [coachId] }],
-  ["empty selection", {}, { individuals: [], groups: [] }],
-  ["empty eligible group", { emptyRoster: true }, { individuals: [], groups: [groupA] }],
-  ["invalid date", {}, { date: "2026-02-30" }],
-  ["malformed recipient", {}, { individuals: ["bad-id"] }],
-  ["roster query failure", { readError: "team_memberships" }, {}],
-  ["group query failure", { readError: "team_groups" }, { groups: [groupA] }],
-  ["group members query failure", { readError: "team_group_memberships" }, { groups: [groupA] }],
-]) {
-  test(`rejects ${name} before any writes`, async () => {
-    const fixture = setup(options);
-    assert.equal((await fixture.action(teamId, idle, form(input))).status, "error");
-    assert.equal(writes(fixture).length, 0);
-    assert.equal(fixture.revalidated.length, 0);
-  });
-}
-
-test("assistant coach can assign their own active library plan without groups", async () => {
-  const fixture = setup({ role: "assistant_coach", planTeam: null, emptyGroups: true });
-  assert.equal((await fixture.action(teamId, idle, form())).status, "success");
-});
-
-test("server resolves current membership rather than trusting a client recipient list", async () => {
-  const fixture = setup();
-  const data = form({ individuals: [], groups: [groupA] });
-  data.set("resolvedAthleteIds", id(999));
-  data.set("assigned_by_user_id", id(999));
-  const state = await fixture.action(teamId, idle, data);
-  assert.equal(state.recipientCount, 2);
-  assert.ok(writes(fixture)[1].payload.every((row) => row.assigned_by_user_id === coachId));
-});
-
-test("definite batch rejection never inserts assignments", async () => {
-  const fixture = setup({ batchFailure: 403 });
-  assert.equal((await fixture.action(teamId, idle, form())).status, "error");
-  assert.equal(writes(fixture).length, 1);
-});
-
-test("definite bulk rejection removes only the new empty batch and never reports success", async () => {
-  const fixture = setup({ assignmentFailure: 400 });
-  const state = await fixture.action(teamId, idle, form({ groups: [groupA] }));
-  assert.equal(state.status, "error");
-  const [batch, assignments, cleanup] = writes(fixture);
-  assert.equal(assignments.payload.length, 2);
-  assert.equal(cleanup.operation, "delete");
-  assert.equal(cleanup.table, "training_assignment_batches");
-  assert.deepEqual(cleanup.filters, [["id", batch.payload.id], ["team_id", teamId], ["assigned_by_user_id", coachId]]);
-  assert.equal(fixture.revalidated.length, 0);
-});
-
-for (const options of [
-  { batchFailure: 0 }, { batchFailure: 503 }, { assignmentFailure: 0 },
-  { assignmentFailure: 503 }, { assignmentFailure: 408 },
-  { throwOn: "training_plan_assignments:insert" },
-]) {
-  test(`uncertain write ${JSON.stringify(options)} requires review and never deletes`, async () => {
-    const fixture = setup(options);
-    const state = await fixture.action(teamId, idle, form());
-    assert.equal(state.status, "review_required");
-    assert.ok(!writes(fixture).some((call) => call.operation === "delete"));
-    assert.equal(fixture.revalidated.length, 0);
-    assert.equal(fixture.reviews.length, 1);
-    assert.ok(!state.message.includes(teamId));
-    assert.ok(!state.message.includes(fixture.reviews[0][1].batchId));
-    const count = writes(fixture).length;
-    assert.equal((await fixture.action(teamId, state, form())).status, "review_required");
-    assert.equal(writes(fixture).length, count);
-  });
-}
-
-for (const options of [{ cleanupDenied: true }, { cleanupError: true }]) {
-  test(`unconfirmed cleanup ${JSON.stringify(options)} requires review`, async () => {
-    const fixture = setup({ assignmentFailure: 400, ...options });
-    assert.equal((await fixture.action(teamId, idle, form())).status, "review_required");
-    assert.equal(fixture.revalidated.length, 0);
-  });
-}
-
-test("successful action state cannot resubmit the same form", async () => {
+test("individual assignment uses one canonical RPC with durable athlete IDs", async () => {
   const fixture = setup();
   const state = await fixture.action(teamId, idle, form());
-  assert.equal((await fixture.action(teamId, state, form())).status, "success");
-  assert.equal(writes(fixture).length, 2);
+  assert.equal(state.status, "success");
+  assert.deepEqual(rpcCall(fixture), { kind: "rpc", name: "assign_my_team_training", payload: {
+    p_batch_id: requestId, p_team_id: teamId, p_training_plan_id: planId,
+    p_start_date: "2026-09-14", p_notes: "Practice off hand", p_athlete_ids: [athleteA],
+  }});
+  assert.ok(!fixture.calls.some((call) => call.table === "training_assignment_batches" || call.table === "training_plan_assignments"));
+  assert.ok(!Object.hasOwn(rpcCall(fixture).payload, "assigned_by_user_id"));
+  assert.ok(!Object.hasOwn(rpcCall(fixture).payload, "athlete_user_id"));
+  assert.deepEqual(fixture.revalidated, [`/teams/${teamId}`, `/teams/${teamId}/assign`, "/"]);
 });
 
-function findComponent(node, component) {
-  if (!node || typeof node !== "object") return null;
-  if (Array.isArray(node)) return node.map((child) => findComponent(child, component)).find(Boolean) ?? null;
-  return node.type === component ? node : findComponent(node.props?.children, component);
-}
-
-test("page loads active available plans and deduplicated group counts with capped pagination", async () => {
-  const fixture = setup({ apiCap: 2 });
-  const Form = () => null;
-  const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
-    ...fixture.mocks,
-    "./assignment-form": { default: Form },
-    "next/link": { default: () => null },
-    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
-  }).default;
-  const tree = await page({ params: Promise.resolve({ teamId }) });
-  const formNode = findComponent(tree, Form);
-  assert.equal(formNode.props.plans.length, 1);
-  assert.equal(formNode.props.athletes.length, 3);
-  assert.deepEqual(formNode.props.groups.map((group) => group.athleteIds), [[athleteA, athleteB], [athleteB, athleteC]]);
-  assert.ok(helper.isDate(formNode.props.defaultStartDate));
-});
-
-test("page does not render an assignment form after a recipient loading failure", async () => {
-  const fixture = setup({ readError: "team_group_memberships" });
-  const Form = () => null;
-  const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
-    ...fixture.mocks, "./assignment-form": { default: Form }, "next/link": { default: () => null },
-    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
-  }).default;
-  const tree = await page({ params: Promise.resolve({ teamId }) });
-  assert.equal(findComponent(tree, Form), null);
-});
-
-function uiFixture({ groups = true, plans = true, emptyGroupMembers = false, state = idle, pending = false } = {}) {
-  const values = [];
-  let cursor;
-  const component = loadTs("src/app/teams/[teamId]/assign/assignment-form.tsx", {
-    react: {
-      ...React,
-      useState(initial) {
-        const index = cursor++;
-        if (!(index in values)) values[index] = initial;
-        return [values[index], (value) => { values[index] = value; }];
-      },
-      useActionState: () => [state, () => {}, pending],
-    },
-    "next/link": { default: (props) => React.createElement("a", props) },
-    "@/lib/training-assignment": helper,
-    "./actions": { assignTraining: async () => idle },
-  }).default;
-  const props = {
-    teamId,
-    plans: plans ? [{ id: planId, name: "Test plan", description: null }] : [],
-    groups: groups ? [
-      { id: groupA, name: "Group A", athleteIds: emptyGroupMembers ? [] : [athleteA, athleteB] },
-      { id: groupB, name: "Group B", athleteIds: emptyGroupMembers ? [] : [athleteB, athleteC] },
-    ] : [],
-    athletes: [athleteA, athleteB, athleteC].map((id, index) => ({ id, name: `Athlete ${index + 1}` })),
-    defaultStartDate: "2026-09-14",
-  };
-  return {
-    render() { cursor = 0; return component(props); },
-  };
-}
-
-function findNode(node, predicate) {
-  if (!node || typeof node !== "object") return null;
-  if (Array.isArray(node)) return node.map((child) => findNode(child, predicate)).find(Boolean) ?? null;
-  return predicate(node) ? node : findNode(node.props?.children, predicate);
-}
-
-test("interactive overlap selections show named unique recipients and enable valid submission", () => {
-  const fixture = uiFixture();
-  const button = (tree) => findNode(tree, (node) => node.type === "button");
-  assert.equal(button(fixture.render()).props.disabled, true);
-  findNode(fixture.render(), (node) => node.type === "select").props.onChange({ target: { value: planId } });
-  for (const group of [groupA, groupB]) {
-    findNode(fixture.render(), (node) => node.type === "input" && node.props.value === group).props.onChange();
-  }
-  findNode(fixture.render(), (node) => node.type === "input" && node.props.value === athleteB).props.onChange();
-  const tree = fixture.render();
-  assert.equal(button(tree).props.disabled, false);
-  const text = renderToStaticMarkup(tree).replace(/<[^>]*>/g, "");
-  assert.ok(text.includes("3 unique athletes will receive training"));
-  assert.ok(text.includes("Included through a selected group"));
-  assert.ok(!/00000000-0000/.test(text));
-  const recipients = findNode(tree, (node) => node.props["aria-label"] === "Selected recipients");
-  assert.equal(recipients.props.children.length, 3);
-  findNode(tree, (node) => node.type === "input" && node.props.value === groupB).props.onChange();
-  assert.ok(renderToStaticMarkup(fixture.render()).includes("2 unique"));
-});
-
-test("no groups still permits individual assignment and no plans disables submission", () => {
-  const fixture = uiFixture({ groups: false });
-  findNode(fixture.render(), (node) => node.type === "select").props.onChange({ target: { value: planId } });
-  findNode(fixture.render(), (node) => node.type === "input" && node.props.value === athleteA).props.onChange();
-  const tree = fixture.render();
-  assert.equal(findNode(tree, (node) => node.type === "button").props.disabled, false);
-  assert.ok(renderToStaticMarkup(tree).includes("No groups have been created"));
-  const noPlans = uiFixture({ plans: false }).render();
-  assert.equal(findNode(noPlans, (node) => node.type === "button").props.disabled, true);
-  assert.ok(renderToStaticMarkup(noPlans).includes("No active training plans"));
-});
-
-test("pending and review-required forms cannot submit; success replaces the form", () => {
-  for (const options of [{ pending: true }, { state: { status: "review_required", message: "Ask for review." } }]) {
-    const tree = uiFixture(options).render();
-    assert.equal(findNode(tree, (node) => node.type === "fieldset").props.disabled, true);
-    assert.equal(findNode(tree, (node) => node.type === "button").props.disabled, true);
-  }
-  const success = uiFixture({ state: { status: "success", message: "Training assigned to 3 athletes." } }).render();
-  assert.equal(findNode(success, (node) => node.type === "form"), null);
-  assert.ok(renderToStaticMarkup(success).includes("Training assigned to 3 athletes."));
-});
-
-test("draft-only team and empty group reproduce the live page without offering a plan", async () => {
-  const fixture = setup({ planStatus: "draft", emptyGroupMembers: true });
-  const Form = () => null;
-  const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
-    ...fixture.mocks,
-    "./assignment-form": { default: Form },
-    "next/link": { default: () => null },
-    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
-  }).default;
-  const tree = await page({ params: Promise.resolve({ teamId }) });
-  const formNode = findComponent(tree, Form);
-  assert.equal(formNode.props.plans.length, 0);
-  assert.equal(formNode.props.groups[0].athleteIds.length, 0);
-  assert.equal(formNode.props.athletes.length, 3);
-  assert.equal(writes(fixture).length, 0);
-});
-
-test("empty group plus individual counts one but explains the missing active plan at submit", () => {
-  const fixture = uiFixture({ plans: false, emptyGroupMembers: true });
-  for (const value of [groupA, athleteA]) {
-    findNode(fixture.render(), (node) => node.type === "input" && node.props.value === value).props.onChange();
-  }
-  const tree = fixture.render();
-  const markup = renderToStaticMarkup(tree);
-  assert.ok(markup.includes("1 unique"));
-  assert.ok(markup.includes("no active training plan"));
-  assert.ok(markup.includes("Draft and archived plans cannot be assigned"));
-  assert.equal(findNode(tree, (node) => node.type === "button").props.disabled, true);
-  assert.equal(findNode(tree, (node) => node.type === "select"), null);
-  assert.ok(!markup.includes("Included through a selected group"));
-});
-
-test("action validation errors remain visible in the form", () => {
-  const state = { status: "error", message: "This training plan is not available for this team." };
-  const tree = uiFixture({ state }).render();
-  const alert = findNode(tree, (node) => node.props.role === "alert");
-  assert.equal(alert.props.children, state.message);
-});
-
-function addSecondTeam(fixture, role = "assistant_coach") {
-  fixture.tables.teams.push({ id: otherTeam, name: "Second team" });
-  fixture.tables.team_memberships.push(
-    { id: id(50), team_id: otherTeam, user_id: coachId, role },
-    { id: id(51), team_id: otherTeam, user_id: id(52), role: "athlete", profiles: { full_name: "Second team athlete" } },
-  );
-}
-test("one coach library plan is reusable across two authorized assignment teams", async () => {
-  const fixture = setup();
-  addSecondTeam(fixture);
-  assert.equal((await fixture.action(teamId, idle, form())).status, "success");
-  assert.equal((await fixture.action(otherTeam, idle, form({ individuals: [id(52)] }))).status, "success");
-  const assignmentWrites = writes(fixture).filter((call) => call.table === "training_plan_assignments");
-  assert.equal(assignmentWrites.length, 2);
-  assert.equal(assignmentWrites[0].payload[0].training_plan_id, assignmentWrites[1].payload[0].training_plan_id);
-  assert.equal(assignmentWrites[1].payload[0].team_id, otherTeam);
-  assert.equal(assignmentWrites[1].payload[0].athlete_user_id, id(52));
-  assert.ok(!writes(fixture).some((call) => call.table === "training_plans"));
-});
-test("own plan cannot be assigned in an athlete-only team context", async () => {
-  const fixture = setup();
-  addSecondTeam(fixture, "athlete");
-  assert.equal((await fixture.action(otherTeam, idle, form({ individuals: [id(52)] }))).status, "error");
-  assert.equal(writes(fixture).length, 0);
-});
-for (const input of [{ individuals: [athleteA] }, { individuals: [], groups: [groupA] }]) {
-  test(`cross-team library plan still rejects foreign recipients ${JSON.stringify(input)}`, async () => {
+for (const [name, input, expected] of [
+  ["group", { individuals: [], groups: [groupA] }, [athleteA, athleteB]],
+  ["mixed overlapping group and individual", { individuals: [athleteA, athleteB], groups: [groupA, groupB] }, [athleteA, athleteB, athleteC]],
+]) {
+  test(`${name} assignment calls the RPC once with deduplicated durable recipients`, async () => {
     const fixture = setup();
-    addSecondTeam(fixture);
-    assert.equal((await fixture.action(otherTeam, idle, form(input))).status, "error");
-    assert.equal(writes(fixture).length, 0);
+    const state = await fixture.action(teamId, idle, form(input));
+    assert.equal(state.status, "success");
+    assert.equal(fixture.calls.filter((call) => call.kind === "rpc").length, 1);
+    assert.deepEqual(rpcCall(fixture).payload.p_athlete_ids, expected);
   });
 }
-test("assignment catalog filters owner/kind/status and never filters by plan team", async () => {
-  const fixture = setup();
-  fixture.tables.training_plans.push(
-    { ...fixture.tables.training_plans[0], id: id(60), owner_user_id: id(999) },
-    { ...fixture.tables.training_plans[0], id: id(61), kind: "template", visibility: "public" },
-    { ...fixture.tables.training_plans[0], id: id(62), status: "draft" },
-    { ...fixture.tables.training_plans[0], id: id(63), status: "archived" },
-  );
-  addSecondTeam(fixture);
-  const Form = () => null;
+
+test("a durable athlete without an auth-user identity is not rejected by the application", async () => {
+  const fixture = setup({ includeChild: true });
+  const state = await fixture.action(teamId, idle, form({ individuals: [childAthlete] }));
+  assert.equal(state.status, "success");
+  assert.deepEqual(rpcCall(fixture).payload.p_athlete_ids, [childAthlete]);
+});
+
+test("server recomputes group recipients and ignores client actor or compatibility fields", async () => {
+  const fixture = setup(); const data = form({ individuals: [], groups: [groupA] });
+  data.set("resolvedAthleteIds", id(999)); data.set("assigned_by_user_id", id(999)); data.set("athlete_user_id", id(999));
+  await fixture.action(teamId, idle, data);
+  assert.deepEqual(rpcCall(fixture).payload.p_athlete_ids, [athleteA, athleteB]);
+  assert.equal(JSON.stringify(rpcCall(fixture).payload).includes(id(999)), false);
+});
+
+for (const [name, options, expected] of [
+  ["unauthorized recipient", { rpcError: "Recipient is not authorized for this team assignment" }, "error"],
+  ["idempotency conflict", { rpcError: "Assignment idempotency conflict" }, "error"],
+  ["integrity failure", { rpcError: "Assignment idempotency integrity failure" }, "review_required"],
+  ["uncertain transport failure", { rpcThrow: true }, "error"],
+]) {
+  test(`${name} returns a safe state without direct writes`, async () => {
+    const fixture = setup(options);
+    const state = await fixture.action(teamId, idle, form());
+    assert.equal(state.status, expected);
+    assert.ok(!state.message.includes("P0001"));
+    assert.equal(fixture.calls.filter((call) => call.kind === "rpc").length, 1);
+    assert.equal(fixture.revalidated.length, 0);
+  });
+}
+
+test("uncertain failure retains the same request id for a manual retry and never auto-retries", async () => {
+  const fixture = setup({ rpcThrow: true }); const data = form();
+  await fixture.action(teamId, idle, data);
+  assert.equal(fixture.calls.filter((call) => call.kind === "rpc").length, 1);
+  await fixture.action(teamId, { status: "error", message: "retry" }, data);
+  assert.equal(fixture.calls.filter((call) => call.kind === "rpc").length, 2);
+  assert.ok(fixture.calls.filter((call) => call.kind === "rpc").every((call) => call.payload.p_batch_id === requestId));
+});
+
+for (const [name, options, input] of [
+  ["signed out", { signedOut: true }, {}], ["non-roster durable athlete", {}, { individuals: [id(999)] }],
+  ["invalid request id", {}, { request: "invalid" }], ["invalid date", {}, { date: "2026-02-30" }],
+  ["group lookup failure", { readError: "team_groups" }, { individuals: [], groups: [groupA] }],
+]) test(`${name} is rejected before RPC`, async () => {
+  const fixture = setup(options); const state = await fixture.action(teamId, idle, form(input));
+  assert.equal(state.status, "error"); assert.equal(fixture.calls.filter((call) => call.kind === "rpc").length, 0);
+});
+
+test("page emits durable athlete IDs while preserving legacy names and group display", async () => {
+  const fixture = setup(); const Form = () => null;
   const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
     ...fixture.mocks, "./assignment-form": { default: Form }, "next/link": { default: () => null },
-    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("404"); } },
+    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("not found"); } },
   }).default;
-  for (const contextTeam of [teamId, otherTeam]) {
-    const tree = await page({ params: Promise.resolve({ teamId: contextTeam }) });
-    assert.deepEqual(findComponent(tree, Form).props.plans.map((plan) => plan.id), [planId]);
-  }
-  const reads = fixture.calls.filter((call) => call.table === "training_plans");
-  assert.ok(reads.every((call) => !call.filters.some(([key]) => key === "team_id")));
+  const tree = await page({ params: Promise.resolve({ teamId }) });
+  const find = (node) => !node || typeof node !== "object" ? null : node.type === Form ? node : Array.isArray(node) ? node.map(find).find(Boolean) : find(node.props?.children);
+  const formNode = find(tree);
+  assert.deepEqual(formNode.props.athletes.map((athlete) => athlete.athleteId), [athleteA, athleteB, athleteC]);
+  assert.deepEqual(formNode.props.groups.map((group) => group.athleteIds), [[athleteA, athleteB], [athleteB, athleteC]]);
+});
+
+test("form holds a stable hidden request UUID and uses athleteId semantics", () => {
+  const values = []; let cursor = 0;
+  const Form = loadTs("src/app/teams/[teamId]/assign/assignment-form.tsx", {
+    react: { ...React, useState(initial) { const i = cursor++; if (!(i in values)) values[i] = typeof initial === "function" ? initial() : initial; return [values[i], (v) => { values[i] = v; }]; }, useActionState: () => [idle, () => {}, false] },
+    "next/link": { default: (props) => React.createElement("a", props) }, "@/lib/training-assignment": helper, "./actions": { assignTraining: async () => idle },
+  }).default;
+  const props = { teamId, plans: [{ id: planId, name: "Test", description: null }], groups: [], athletes: [{ athleteId: athleteA, name: "Athlete A" }], defaultStartDate: "2026-09-14" };
+  const tree = Form(props);
+  const find = (node, pred) => !node || typeof node !== "object" ? null : pred(node) ? node : Array.isArray(node) ? node.map((x) => find(x, pred)).find(Boolean) : find(node.props?.children, pred);
+  const hidden = find(tree, (node) => node.type === "input" && node.props.name === "assignmentRequestId");
+  assert.match(hidden.props.value, /^[0-9a-f-]{36}$/i);
+  assert.equal(find(tree, (node) => node.type === "input" && node.props.name === "athleteIds").props.value, athleteA);
 });

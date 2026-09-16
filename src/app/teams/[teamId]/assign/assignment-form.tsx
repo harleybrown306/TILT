@@ -27,13 +27,17 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
   const [individualIds, setIndividualIds] = useState<string[]>([]);
   const [groupIds, setGroupIds] = useState<string[]>([]);
   const [planId, setPlanId] = useState("");
+  // One mounted form owns one retry-safe idempotency key. Error responses retain
+  // this hidden value for a safe manual retry; the fresh assignment page mounts
+  // a new form and therefore creates a new request.
+  const [assignmentRequestId] = useState(() => crypto.randomUUID());
   const [state, formAction, pending] = useActionState(assignTraining.bind(null, teamId), initialState);
   const recipientIds = resolveRecipientIds(
     individualIds,
     groups.filter((group) => groupIds.includes(group.id)).flatMap((group) => group.athleteIds),
-    athletes.map((athlete) => athlete.id),
+    athletes.map((athlete) => athlete.athleteId),
   );
-  const recipients = athletes.filter((athlete) => recipientIds.includes(athlete.id));
+  const recipients = athletes.filter((athlete) => recipientIds.includes(athlete.athleteId));
   const selectedPlan = plans.find((plan) => plan.id === planId);
   const inputClass = "w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-emerald-500";
 
@@ -51,6 +55,7 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
 
   return (
     <form action={formAction} className="space-y-6">
+      <input type="hidden" name="assignmentRequestId" value={assignmentRequestId} />
       {state.message && <div role="alert" className="rounded-2xl border border-rose-900 bg-rose-950/30 p-5 text-rose-300">{state.message}</div>}
       <fieldset disabled={pending || state.status === "review_required"} className="space-y-6 disabled:opacity-70">
         <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900 p-6">
@@ -90,9 +95,9 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
           <h2 id="athletes-heading" className="text-2xl font-semibold">Athletes</h2>
           {athletes.length === 0 ? <p className="mt-5 text-slate-400">No athletes are on this team. Add athletes to the roster before assigning training.</p> : <div className="mt-5 grid gap-3 sm:grid-cols-2">
             {athletes.map((athlete) => {
-              const includedThroughGroup = groups.some((group) => groupIds.includes(group.id) && group.athleteIds.includes(athlete.id));
-              return <label key={athlete.id} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700 p-4">
-                <input type="checkbox" name="athleteIds" value={athlete.id} checked={individualIds.includes(athlete.id)} onChange={() => setIndividualIds(toggleId(individualIds, athlete.id))} className="mt-1 accent-emerald-500" />
+              const includedThroughGroup = groups.some((group) => groupIds.includes(group.id) && group.athleteIds.includes(athlete.athleteId));
+              return <label key={athlete.athleteId} className="flex cursor-pointer items-start gap-3 rounded-xl border border-slate-700 p-4">
+                <input type="checkbox" name="athleteIds" value={athlete.athleteId} checked={individualIds.includes(athlete.athleteId)} onChange={() => setIndividualIds(toggleId(individualIds, athlete.athleteId))} className="mt-1 accent-emerald-500" />
                 <span><span className="block font-semibold">{athlete.name}</span>{includedThroughGroup && <span className="mt-1 block text-sm text-emerald-400">Included through a selected group</span>}</span>
               </label>;
             })}
@@ -103,7 +108,7 @@ export default function AssignmentForm({ teamId, plans, groups, athletes, defaul
           <h2 id="recipient-heading" className="text-2xl font-semibold" aria-live="polite">{recipients.length} unique {recipients.length === 1 ? "athlete" : "athletes"} will receive training</h2>
           <p className="mt-2 text-sm text-slate-400">Each athlete receives one assignment, even when selected individually and through multiple groups. Group membership is checked again when you submit.</p>
           {recipients.length > 0 ? <ul className="mt-4 flex flex-wrap gap-2" aria-label="Selected recipients">
-            {recipients.map((athlete) => <li key={athlete.id} className="rounded-full bg-slate-800 px-3 py-1 text-sm">{athlete.name}</li>)}
+            {recipients.map((athlete) => <li key={athlete.athleteId} className="rounded-full bg-slate-800 px-3 py-1 text-sm">{athlete.name}</li>)}
           </ul> : <p className="mt-4 text-slate-400">Select athletes or a group containing athletes to continue.</p>}
           {!plans.length && <p role="status" className="mt-4 text-sm text-amber-300">
             Assignment is unavailable because your coach library has no active training plan. Draft and archived plans cannot be assigned; TILT templates must be copied first.
