@@ -36,7 +36,10 @@ test("account lifecycle source keeps profile, role, and summaries out of browser
   assert.match(signup, /auth\/callback/);
   const callback = readFileSync(root + "src/app/auth/callback/route.ts", "utf8");
   assert.match(callback, /exchangeCodeForSession\(code, flowId \? \{ flowId \} : undefined\)/);
-  assert.doesNotMatch(callback, /console\./);
+  assert.match(callback, /\[TILT auth callback diagnostic\]/);
+  assert.match(callback, /codePresent: Boolean\(code\)/);
+  assert.match(callback, /flowIdPresent: Boolean\(flowId\)/);
+  assert.doesNotMatch(callback, /console\.(?:info|error)\([^\n]*(?:code,|flowId,|destination,|url,|cookie)/);
 });
 
 test("recovery uses callback reset destination and neutral success language", () => {
