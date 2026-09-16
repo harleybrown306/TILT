@@ -157,6 +157,52 @@ Use rollback-only SQL fixtures for database authorization/integrity and focused 
 
 ---
 
+## Phase 11B.6C — Player, completion, attempt, and telemetry design
+
+Phase 11B.6B is complete: the canonical assignment RPC creates durable
+assignments, sessions, and immutable prescriptions. Execution remains legacy
+self-athlete-only until its own coordinated cutover.
+
+- A player route is session-centric. It resolves `session.athlete_id`, uses
+  `can_view_athlete` for display, and separately requires
+  `can_act_for_training` to start, resume, submit telemetry, create a result,
+  register an attempt, or finalize an attempt. Staff and platform support
+  visibility never conveys completion authority.
+- Results and attempts belong to `session.athlete_id`. `athlete_user_id` is an
+  optional compatibility reference only; it is NULL for a no-auth child and is
+  never populated with a guardian actor UUID. A trusted completion writer must
+  derive the subject from the session, not browser input.
+- No global active-athlete cookie or selector is needed for `/training/[id]`.
+  Future selector UI is a read-context concern and must be authorized on every
+  request.
+- Events retain no redundant athlete column. Their durable subject derives from
+  the session and, once registered, the matching attempt. Event submission and
+  RLS must require ACT for that session’s durable athlete.
+- Browser recovery cannot be enabled for real parent-managed child execution
+  until IndexedDB partitions bundles/checkpoints/outbox/flush locks by durable
+  `athleteId` and validates `{ athleteId, sessionId, attemptId }`. The current
+  actor-keyed v1 storage may only be recovered under self-linked UUID parity.
+- Actor provenance fields are deferred. Existing result, session, and attempt
+  correctness comes from server-side actor authorization plus durable athlete
+  ownership; future provenance fields must be server-derived.
+
+### Phase 11B.6C.1 foundation
+
+The first executable artifact makes `workout_results.athlete_user_id` and
+`workout_session_attempts.athlete_user_id` optional and adds owner-presence
+checks. It adds the internal session-scoped ACT helper. It deliberately does
+not alter result/event RLS, registration/finalization RPCs, completion sync,
+or browser code, so child execution remains blocked. Cross-table durable
+agreement is enforced by the future trusted completion, registration, and
+finalization writers rather than fragile synchronization triggers.
+
+The forward-only boundary remains the first committed result or attempt with
+`athlete_id IS NOT NULL AND athlete_user_id IS NULL`. Before that boundary,
+legacy-only rollback remains structurally possible; after it, old player and
+read/authorization paths must never be restored.
+
+---
+
 ## Phase 11B.6A — Transition Database Boundary
 
 ### Current nullability and structural blockers
