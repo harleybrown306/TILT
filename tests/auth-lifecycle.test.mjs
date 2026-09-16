@@ -35,7 +35,7 @@ test("account lifecycle source keeps profile, role, and summaries out of browser
   assert.match(signup, /auth\.signUp/);
   assert.match(signup, /auth\/callback/);
   const callback = readFileSync(root + "src/app/auth/callback/route.ts", "utf8");
-  assert.match(callback, /exchangeCodeForSession\(code\)/);
+  assert.match(callback, /exchangeCodeForSession\(code, flowId \? \{ flowId \} : undefined\)/);
   assert.doesNotMatch(callback, /console\./);
 });
 
@@ -60,13 +60,15 @@ test("server action modules export only async functions", () => {
   assert.doesNotMatch(actions, /^export\s+(?:const|let|type|class|interface)\b/m);
 });
 
-function loadCallback({ redirectType, exchangedCookies = [] }) {
+function loadCallback({ redirectType, exchangedCookies = [], exchangeError = null }) {
   const setCookies = [];
+  const exchangeCalls = [];
   const callback = load("src/app/auth/callback/route.ts", {
     "next/headers": { cookies: async () => ({ getAll: () => [{ name: "pkce", value: "verifier" }] }) },
-    "@supabase/ssr": { createServerClient: (_url, _key, options) => ({ auth: { exchangeCodeForSession: async () => {
+    "@supabase/ssr": { createServerClient: (_url, _key, options) => ({ auth: { exchangeCodeForSession: async (_code, exchangeOptions) => {
+      exchangeCalls.push(exchangeOptions);
       options.cookies.setAll(exchangedCookies);
-      return { data: { user: {}, session: {}, redirectType }, error: null };
+      return { data: { user: {}, session: {}, redirectType }, error: exchangeError };
     } } }) },
     "next/server": {
       NextResponse: {
@@ -78,7 +80,7 @@ function loadCallback({ redirectType, exchangedCookies = [] }) {
     },
     "@/lib/auth-continuation": auth,
   });
-  return { callback, setCookies };
+  return { callback, setCookies, exchangeCalls };
 }
 
 test("recovery callback returns Supabase session cookies and recovery intent together", async () => {
@@ -93,6 +95,33 @@ test("non-recovery callback cannot reach reset-password or set recovery intent",
   const response = await callback.GET(new Request("https://tilt.test/auth/callback?code=confirmation&next=/reset-password"));
   assert.equal(response.url, "https://tilt.test/login?auth=error");
   assert.equal(setCookies.some(({ name }) => name === "tilt_password_recovery"), false);
+});
+
+test("signup confirmation passes its PKCE flow ID and preserves its invitation continuation", async () => {
+  const { callback, exchangeCalls } = loadCallback({ redirectType: null });
+  const response = await callback.GET(new Request(`https://tilt.test/auth/callback?code=signup-code&sb_flow_id=abcDEF12&next=${encodeURIComponent(`/invite/${token}`)}`));
+  assert.equal(response.url, `https://tilt.test/invite/${token}`);
+  assert.deepEqual(exchangeCalls, [{ flowId: "abcDEF12" }]);
+});
+
+test("ordinary signup confirms to root and missing or failed exchanges fail safely", async () => {
+  const ordinary = loadCallback({ redirectType: null });
+  assert.equal((await ordinary.callback.GET(new Request("https://tilt.test/auth/callback?code=signup-code&next=/"))).url, "https://tilt.test/");
+  const missing = loadCallback({ redirectType: null });
+  assert.equal((await missing.callback.GET(new Request("https://tilt.test/auth/callback?next=/"))).url, "https://tilt.test/login?auth=error");
+  const failed = loadCallback({ redirectType: null, exchangeError: { message: "invalid" } });
+  assert.equal((await failed.callback.GET(new Request("https://tilt.test/auth/callback?code=bad&next=/"))).url, "https://tilt.test/login?auth=error");
+});
+
+test("signup preserves validated invitation continuation through the email redirect", () => {
+  const signup = readFileSync(root + "src/app/signup/page.tsx", "utf8");
+  const login = readFileSync(root + "src/app/login/page.tsx", "utf8");
+  const client = readFileSync(root + "src/lib/supabase/client.ts", "utf8");
+  assert.match(signup, /useSearchParams\(\)/);
+  assert.match(signup, /emailRedirectTo:.*encodeURIComponent\(destination\)/);
+  assert.match(login, /useSearchParams\(\)/);
+  assert.match(login, /authPath\("\/signup", next\)/);
+  assert.match(client, /appendPkceFlowIdToRedirects: true/);
 });
 
 test("reset page keeps recovery intent insufficient without an authenticated user", () => {

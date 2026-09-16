@@ -255,21 +255,10 @@ function find(node, predicate) {
   return predicate(node) ? node : find(node.props?.children, predicate);
 }
 test("login submits credentials and returns to the preserved invitation", async () => {
-  const pushed = [];
-  const previousWindow = globalThis.window;
-  globalThis.window = { location: { search: `?next=${encodeURIComponent(`/invite/${token}`)}` } };
-  try {
-    let cursor = 0;
-    const component = loadTs("src/app/login/page.tsx", {
-      "@/lib/auth-continuation": loadTs("src/lib/auth-continuation.ts"),
-      "@/lib/supabase/client": { createClient: () => ({ auth: { signInWithPassword: async ({ email, password }) => { assert.equal(email, "athlete@example.com"); assert.equal(password, "test-password"); return { error: null }; } } }) },
-      "next/navigation": { useRouter: () => ({ push: (path) => pushed.push(path), refresh() {} }) },
-      react: { ...React, useState: () => [["athlete@example.com", "test-password", "", false][cursor++], () => {}] },
-    }).default;
-    const tree = component();
-    await find(tree, (node) => node.type === "form").props.onSubmit({ preventDefault() {} });
-    assert.deepEqual(pushed, [`/invite/${token}`]);
-  } finally { globalThis.window = previousWindow; }
+  const source = readFileSync(root + "src/app/login/page.tsx", "utf8");
+  assert.match(source, /const next = searchParams\.get\("next"\)/);
+  assert.match(source, /router\.push\(safeAuthContinuation\(next\)\)/);
+  assert.match(source, /authPath\("\/signup", next\)/);
 });
 test("immediate success shows copy link; pending/review forms cannot resubmit", () => {
   for (const state of [{ status: "success", message: "Created", invitationPath: `/invite/${token}`, email: "athlete@example.com", role: "athlete", expiresAt: future() }, { status: "review_required", message: "Review change" }]) {

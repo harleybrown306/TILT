@@ -6,6 +6,7 @@ import { safeAuthContinuation } from "@/lib/auth-continuation";
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
+  const flowId = url.searchParams.get("sb_flow_id");
   const destination = safeAuthContinuation(url.searchParams.get("next"));
   if (!code) return NextResponse.redirect(new URL("/login?auth=error", url.origin));
 
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
       },
     }
   );
-  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+  const { data, error } = await supabase.auth.exchangeCodeForSession(code, flowId ? { flowId } : undefined);
   if (error) return NextResponse.redirect(new URL("/login?auth=error", url.origin));
   // auth-js preserves the recovery redirect type in the PKCE verifier and returns it
   // at runtime, although the current public result type omits this field.

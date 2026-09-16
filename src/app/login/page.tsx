@@ -1,18 +1,24 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { authPath, safeAuthContinuation } from "@/lib/auth-continuation";
 
 export default function LoginPage() {
+  return <Suspense fallback={<main className="min-h-screen bg-slate-950" />}><LoginForm /></Suspense>;
+}
+
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+  const next = searchParams.get("next");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(() =>
-    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("auth") === "error"
+    searchParams.get("auth") === "error"
       ? "We could not complete authentication. Try again or request a new link."
       : ""
   );
@@ -34,7 +40,7 @@ export default function LoginPage() {
       return;
     }
 
-    router.push(safeAuthContinuation(new URLSearchParams(window.location.search).get("next")));
+    router.push(safeAuthContinuation(next));
     router.refresh();
   }
 
@@ -78,7 +84,7 @@ export default function LoginPage() {
           </div>
 
           <div className="flex justify-end">
-            <a href={authPath("/forgot-password", new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("next"))} className="text-sm text-emerald-400 hover:text-emerald-300">
+            <a href={authPath("/forgot-password", next)} className="text-sm text-emerald-400 hover:text-emerald-300">
               Forgot password?
             </a>
           </div>
@@ -119,7 +125,7 @@ export default function LoginPage() {
         </form>
         <p className="mt-6 text-center text-sm text-slate-400">
           Need an account?{" "}
-          <a href={authPath("/signup", new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get("next"))} className="font-medium text-emerald-400 hover:text-emerald-300">Create account</a>
+          <a href={authPath("/signup", next)} className="font-medium text-emerald-400 hover:text-emerald-300">Create account</a>
         </p>
       </div>
     </main>

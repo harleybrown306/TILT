@@ -1,12 +1,17 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { FormEvent, Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { authPath, safeAuthContinuation } from "@/lib/auth-continuation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
+  return <Suspense fallback={<main className="min-h-screen bg-slate-950" />}><SignupForm /></Suspense>;
+}
+
+function SignupForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -14,7 +19,7 @@ export default function SignupPage() {
   const [error, setError] = useState("");
   const [confirmationNeeded, setConfirmationNeeded] = useState(false);
   const [loading, setLoading] = useState(false);
-  const next = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("next");
+  const next = searchParams.get("next");
 
   async function handleSignup(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
