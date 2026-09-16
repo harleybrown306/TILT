@@ -19,7 +19,7 @@ Historical protections remain: sessions, results, attempts, events, and prescrip
 
 ## 2. Current writes
 
-1. **Assignment:** the coach server action resolves legacy roster/group `user_id` values, validates legacy coach/athlete membership, writes one batch and `training_plan_assignments(athlete_user_id, assigned_by_user_id)`. Database automation generates sessions and the immutable prescription capture trigger records the session snapshot.
+1. **Assignment:** the coach server action validates durable roster recipients and calls `assign_my_team_training` once with a stable batch UUID. The canonical RPC writes the batch and durable `training_plan_assignments`; the protected `SECURITY DEFINER` trigger generates sessions and the immutable prescription capture trigger records each snapshot. This is the only current production session-creation path.
 2. **Player/start:** `/training/[sessionId]` and `WorkoutPlayer` require `session.athlete_user_id === auth user`. The browser creates the attempt UUID and sequence-zero event.
 3. **Registration:** after persisted `workout_started`, the browser invokes `register_my_workout_session_attempt`. The RPC verifies `training_sessions.athlete_user_id = auth.uid()`, then snapshots prescription aggregates into an attempt with `athlete_user_id = auth.uid()`.
 4. **Telemetry:** the same-origin endpoint verifies the authenticated actor owns every session by `athlete_user_id`, then appends event rows. Event RLS repeats session ownership and immutable prescription/result checks. Sequence, idempotency, conflicts, and finalized-attempt late-event rejection stay database-enforced.
@@ -72,6 +72,12 @@ Migrate dashboard, Resume, athlete detail, attendance, adherence, team analytics
 ### Stage 5 — enforce durable ownership
 
 Only after Stage 1–4 are deployed and production validation shows every new row has `athlete_id`, make `athlete_id NOT NULL` on the four owner tables. Keep legacy columns nullable compatibility fields until all old readers, RLS, group membership, invitations, and historical support paths are retired. Final removal/redefinition of legacy fields is a separate irreversible cleanup after a long stable period.
+
+### Stage 1 retirement note
+
+After production validation of the canonical assignment writer, ordinary authenticated direct `training_sessions` INSERT is retired. The assignment generator remains a postgres-owned `SECURITY DEFINER` trigger and continues to create sessions and immutable prescriptions. Direct batch and assignment INSERT remain temporarily for a rollback to the prior application, which can still create legacy-only rows with `athlete_id = NULL`.
+
+`athlete_user_id` remains compatibility metadata for current downstream reads and authorization. The no-auth-child production boundary has not been crossed, and legacy `team_group_memberships.athlete_user_id` remains a separate future groups/roster cutover.
 
 ## 5. Dual-write and deployment compatibility
 
