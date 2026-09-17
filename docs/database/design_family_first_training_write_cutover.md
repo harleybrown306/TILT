@@ -454,3 +454,24 @@ The function uses the existing batch UUID as a same-request idempotency key, ser
 The existing assignment generator is changed only to copy `NEW.athlete_id` alongside `NEW.athlete_user_id`. The immutable prescription trigger remains unchanged. An owner-presence CHECK on assignments and sessions prevents the ownerless write window while retaining old app writes. The legacy direct session INSERT policy is limited to the old shape (`athlete_id IS NULL`, legacy owner present); the canonical RPC/SECURITY DEFINER trigger is the durable writer.
 
 This is not yet a player/result/attempt/telemetry/read cutover. It must be externally reviewed, applied, and validated before Phase 11B.6B.2 changes the server action.
+
+### Phase 11B.6C.2B.1 — attempt ownership materialization repair
+
+Production validation of 6C.2B confirmed that the canonical result RPC works:
+it created one self-owned canonical result, synchronized its session, persisted
+the terminal telemetry event after result creation, and finalized Measurement V1.
+It also exposed a materialization defect: the legacy registration writer copied
+only `athlete_user_id = auth.uid()` and omitted `workout_session_attempts.athlete_id`.
+The resulting attempt retained its legacy self compatibility owner, so the
+Phase 11B.6C.1 owner-presence check correctly allowed it, but it lacked the
+durable athlete subject required for the family-first model.
+
+6C.2B.1 is a narrow repair, not a family attempt-authorization cutover. It
+preflights and reconciles only attempts whose session and, when linked, result
+unambiguously agree. It changes the trusted registration writer to copy both
+ownership values from its locked session, and makes finalization reject any
+attempt/session/result ownership disagreement before materializing metrics.
+The temporary self-only authorization remains in place; guardian and no-auth
+child player execution remain blocked. The production child boundary was not
+crossed. Phase 11B.6C.2C remains blocked until this repair is reviewed,
+applied, and validated.
