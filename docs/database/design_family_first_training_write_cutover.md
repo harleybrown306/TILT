@@ -247,6 +247,32 @@ execution, alter live database behavior, or cross the no-auth-child boundary.
 It is the exclusive execution capability. Team staff, assistants, admins, and
 ordinary viewers do not receive ACT merely from those roles.
 
+### 6C.3C application integration gate
+
+After the 6C.3B database cutover, the server page can safely obtain documented
+VIEW by selecting the requested `training_sessions` row under the authenticated
+caller and relying on RLS. That query resolves the authoritative subject from
+`session.athlete_id`; it must not accept an athlete subject from the URL or
+browser.
+
+The application cannot yet derive the distinct ACT capability safely. The live
+authority is `private.can_act_for_training_session(uuid)`: it is intentionally
+private, derives the actor from `auth.uid()`, and is authenticated-callable only
+because RLS evaluates it directly. There is no existing public, authenticated,
+boolean capability RPC for a server/client Supabase application client to use.
+Calling the private helper directly, inferring ACT from documented VIEW, or
+recreating guardian/team/admin rules in TypeScript would weaken the boundary.
+
+Therefore 6C.3C stops before application changes. A separately reviewed
+database step must first provide a narrow public capability boundary, such as
+`public.can_act_for_training_session(p_session_id uuid) RETURNS boolean`, with
+an actor derived only from `auth.uid()`, fixed empty `search_path`, delegation
+to the private helper, and EXECUTE granted only to `authenticated` after
+revoking PUBLIC and anon. It must accept no actor, profile, or athlete identity
+parameter. Once that RPC is live, the page can render the interactive player,
+recovery, completed-delivery flushing, telemetry submission, registration,
+completion, and finalization only when its server-derived result is true.
+
 ### Ownership and telemetry model
 
 The browser continues to submit only session, attempt, and append-only event
