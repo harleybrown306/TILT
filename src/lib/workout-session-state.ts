@@ -94,7 +94,10 @@ export function changeAttempt(original: Checkpoint, command: Command, time: numb
     }
   }
   // Finished guidance is still an unfinished attempt until the result is saved.
-  if ((command === "hidden" || command === "visible") && !cp.finalized) {
+  // Once timed guidance has reached its finished state, visibility is no
+  // longer attributable to a prescribed work/rest phase. Emitting it would
+  // create an invalid Measurement V1 event before canonical completion.
+  if ((command === "hidden" || command === "visible") && !cp.finalized && (cp.phase === "work" || cp.phase === "rest")) {
     emit(cp, command === "hidden" ? "page_hidden" : "page_visible", now, events, uuid);
   }
   return { checkpoint: cp, events };

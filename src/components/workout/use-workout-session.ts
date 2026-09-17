@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { finalizePersistedWorkoutAttempt } from "@/lib/workout-attempt-finalization";
 import { beginAttempt, changeAttempt, recoveryNow, type Checkpoint, type Command, type WorkoutStep } from "@/lib/workout-session-state";
 import { flushEvents, mutateBundle, saveChange, storedCheckpoint } from "@/lib/workout-session-storage";
 
@@ -28,11 +29,7 @@ export function useWorkoutSession(input: Input) {
   const finalizeAttempt = useCallback(async () => {
     const cp = current.current; if (!cp?.finalized) return;
     await flush();
-    const { data, error: eventError } = await supabase.from("workout_session_events").select("id")
-      .eq("session_id", input.sessionId).eq("attempt_id", cp.attemptId).eq("event_type", "workout_completed").limit(1);
-    if (eventError || !data?.length) throw new Error("Workout completion telemetry is not persisted yet.");
-    const { error } = await supabase.rpc("finalize_my_workout_session_attempt", { p_attempt_id: cp.attemptId });
-    if (error) throw error;
+    await finalizePersistedWorkoutAttempt(supabase, input.sessionId, cp.attemptId);
   }, [flush, supabase, input.sessionId]);
   function now() {
     const anchor = clock.current;

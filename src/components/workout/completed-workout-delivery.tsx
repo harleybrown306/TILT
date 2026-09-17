@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { finalizePersistedWorkoutAttempt } from "@/lib/workout-attempt-finalization";
 import { changeAttempt, recoveryNow } from "@/lib/workout-session-state";
 import { flushEvents, mutateBundle, saveChange, storedCheckpoint } from "@/lib/workout-session-storage";
 // Only mounted after the server confirms canonical completion. Recovers the narrow
@@ -20,9 +21,14 @@ export default function CompletedWorkoutDelivery({ actorUserId, athleteId, sessi
           }
         });
         await flushEvents(athleteId, actorUserId, verify);
+        const bundle = await mutateBundle(athleteId, () => {});
+        const checkpoint = storedCheckpoint(bundle, athleteId, sessionId);
+        if (resultExists && checkpoint?.finalized) {
+          await finalizePersistedWorkoutAttempt(client, sessionId, checkpoint.attemptId);
+        }
       } catch { /* Completion is already authoritative, even if recovery fails. */ }
     };
-    const periodic = window.setInterval(() => { void flushEvents(athleteId, actorUserId, verify); }, 30000);
+    const periodic = window.setInterval(() => { void finish(); }, 30000);
     void finish(); window.addEventListener("online", finish);
     return () => { window.removeEventListener("online", finish); clearInterval(periodic); };
   }, [actorUserId, athleteId, sessionId, resultExists]);
