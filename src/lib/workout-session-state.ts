@@ -5,7 +5,7 @@ export type WorkoutStep = {
   restSeconds: number; offHand: boolean; notes: string | null; videoUrl: string | null;
 };
 export type Checkpoint = {
-  version: 1; userId: string; sessionId: string; workoutId: string; workoutName: string;
+  version: 1; athleteId: string; sessionId: string; workoutId: string; workoutName: string;
   attemptId: string; startedAt: number; steps: WorkoutStep[]; index: number;
   phase: "ready" | "work" | "rest" | "finished"; phaseStartedAt: number;
   phaseDurationMs: number; pausedAt: number | null; phasePauseMs: number;
@@ -34,7 +34,7 @@ function emit(cp: Checkpoint, type: WorkoutSessionEvent["event_type"], now: numb
     elapsed_ms: Math.min(30 * MAX_RECOVERY_GAP_MS, Math.max(0, Math.round(now - cp.startedAt))),
     occurred_at: new Date(now).toISOString() });
 }
-export function beginAttempt(input: { userId: string; sessionId: string; workoutId: string; workoutName: string; steps: WorkoutStep[] }, now: number, uuid: () => string): Change {
+export function beginAttempt(input: { athleteId: string; sessionId: string; workoutId: string; workoutName: string; steps: WorkoutStep[] }, now: number, uuid: () => string): Change {
   if (!input.steps.length || input.steps.length > 200) throw new Error("Workout must have 1–200 steps.");
   if (input.steps.some((s) => !Number.isFinite(s.durationSeconds) || !Number.isFinite(s.restSeconds) || s.durationSeconds < 0 || s.restSeconds < 0 || s.durationSeconds > 86400 || s.restSeconds > 86400)) throw new Error("Invalid workout durations.");
   const cp: Checkpoint = { ...input, steps: input.steps.map((s) => ({ ...s })), version: 1,

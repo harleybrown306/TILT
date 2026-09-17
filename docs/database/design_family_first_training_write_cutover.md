@@ -226,6 +226,189 @@ forward-only no-auth-child boundary remains uncrossed.
 
 ---
 
+## Phase 11B.6C.3 — Family-first attempt and telemetry authorization design
+
+This section is an inspection/design record only. It does not enable guardian
+execution, alter live database behavior, or cross the no-auth-child boundary.
+
+### Current self-only gates
+
+| Boundary | Current rule | Guardian/no-auth child effect | Target rule |
+|---|---|---|---|
+| `/training/[sessionId]` / `WorkoutPlayer` | page and player require `session.athlete_user_id = auth.uid()` for interactive use | blocks both a parent and a child without an auth account | read with `can_view_athlete(session.athlete_id)`; render interactive player only when server-derived `can_act_for_training(session.athlete_id)` is true |
+| Telemetry endpoint | route selects every submitted session with `athlete_user_id = auth.uid()` | rejects child session batches before event insert | resolve each submitted session and require ACT for its durable athlete |
+| `workout_session_events` INSERT RLS | parent session `athlete_user_id = auth.uid()`; completion event result likewise matches the actor | rejects every child event | require ACT for the session durable athlete, retain every existing immutable prescription/result, shape, and late-event rule |
+| Attempt registration | private writer requires non-null session legacy owner equal to actor | cannot register a child attempt | require ACT; derive both attempt owner fields from locked session |
+| Attempt finalization | materializer locks attempt where `athlete_user_id = auth.uid()` | guardian cannot finalize a child attempt | lock by attempt ID, resolve session, require ACT, then preserve null-safe subject agreement among session/attempt/result |
+| Canonical completion | `complete_my_training_session` already requires session ACT, then has a temporary legacy-self gate | blocks guardian/no-auth child completion | remove only the temporary legacy-self gate in the coordinated release; continue deriving result ownership from session |
+
+`private.can_act_for_training(athlete_id)` already derives the actor from
+`auth.uid()` and requires an active relationship with `training_permission`.
+It is the exclusive execution capability. Team staff, assistants, admins, and
+ordinary viewers do not receive ACT merely from those roles.
+
+### Ownership and telemetry model
+
+The browser continues to submit only session, attempt, and append-only event
+fields. It must never submit authoritative athlete ownership or measurement
+summaries. The endpoint/RLS/RPC resolves `training_sessions.id -> athlete_id`,
+checks ACT for that subject, and then derives ownership:
+
+- `workout_session_attempts.athlete_id = session.athlete_id`;
+- `workout_session_attempts.athlete_user_id = session.athlete_user_id`;
+- `workout_results.athlete_id = session.athlete_id`;
+- `workout_results.athlete_user_id = session.athlete_user_id`.
+
+For a no-auth child the latter two values are NULL. Events retain no redundant
+`athlete_id`: their subject derives through the immutable session and matching
+attempt. This avoids browser-controlled duplication while preserving event
+sequence, conflict/idempotency, prescription-shape, timing, canonical-result,
+and late-event protections.
+
+Finalization must retain all Measurement V1 checks and must prove, with
+NULL-safe compatibility comparison, that the attempt, session, and canonical
+result identify the same durable athlete. Its authorization check changes from
+legacy login equality to ACT for the resolved session athlete. A completed
+event remains permitted only after the canonical result exists for that same
+session and durable subject.
+
+### Immediate read and player contract
+
+The direct session route needs no global active-athlete selector: the session
+is the authoritative subject context. It must load the durable athlete ID,
+perform server-side VIEW and ACT checks, and pass an already-derived
+`interactive` boolean plus the durable athlete ID into client recovery/player
+code. A client-supplied role, actor ID, or athlete ID must never authorize
+execution.
+
+Before the first real guardian/child run, these immediate reads must be
+family-ready:
+
+1. `training_sessions` SELECT for `can_view_athlete(athlete_id)`;
+2. `workout_results` SELECT for the same subject visibility, so the route can
+   fail closed and show canonical completion;
+3. `workout_session_attempts` and `workout_session_events` SELECT narrowly
+   sufficient for recovery, registration retry, and finalization retry;
+4. `training_session_prescriptions` SELECT through an already-authorized
+   session, rather than an unscoped child-table lookup.
+
+Coach and admin visibility may remain separately scoped support/roster access;
+neither path may set `interactive`. Dashboard, Resume, attendance, adherence,
+and team analytics durable-reader migration can follow later, provided the
+direct session route and its post-completion delivery path are already safe.
+
+### Browser persistence blocker
+
+Guardian execution must **not** be enabled while IndexedDB v1 is actor-keyed.
+Today its `users` store key, `Bundle.userId`, checkpoint validation, outbox,
+flush lock map, completed-workout delivery, and user revalidation all use the
+authenticated actor ID. One parent could therefore load, flush, or recover a
+sibling's state.
+
+The next browser storage version must partition checkpoint/outbox/delivery
+state at least by durable athlete and session, with attempt identity retained:
+
+```text
+bundle / lock scope: athleteId
+checkpoint identity: (athleteId, sessionId, attemptId)
+event delivery identity: (athleteId, sessionId, attemptId, eventId)
+```
+
+The authenticated actor may be stored only as a revalidation hint. Before
+loading, flushing, registering, or finalizing, the application must verify the
+currently authenticated actor still has ACT for that same session subject. It
+must not infer sibling authority from a matching parent actor. v1 records must
+remain recoverable only for legacy self-linked UUID parity until safely
+delivered or retired by a documented compatibility policy; no guessed
+cross-subject migration is safe.
+
+### 6C.3A implementation record — athlete-scoped browser persistence
+
+The local browser implementation now uses IndexedDB schema version 2 in the
+existing `tilt-workout-session-v1` database. Version 1's `users` store remains
+only as a compatibility source; v2 adds an `athletes` store keyed by
+`athleteId`. New bundles carry `athleteId`, checkpoints validate that durable
+athlete plus `sessionId`, and outbox/flush locking/completed-delivery operate
+only within that athlete bundle. Attempt UUID and event payload behavior remain
+unchanged.
+
+The server-loaded `training_sessions.athlete_id` is passed to the current
+self-only interactive player. A missing durable athlete owner fails closed;
+there is no fallback from `auth.uid()` to athlete subject identity. The
+authenticated user ID remains actor-only browser state for the existing
+self-login check and is not a persistence partition or telemetry claim.
+
+On first v2 access, legacy state is migrated only when its v1 key and every
+checkpoint's recorded legacy user ID exactly equal the requested `athleteId`.
+That covers established same-UUID self athletes deterministically and moves
+the proven bundle into v2. Parent-keyed or otherwise ambiguous legacy state is
+not attached to any child and is ignored by the athlete store. The migration is
+idempotent once a v2 bundle exists. No additional family data or actor
+provenance is stored.
+
+This removes the local sibling-collision blocker but does not authorize any
+guardian execution. The remaining coordinated gates are family-safe database
+ACT/event/RPC/read authorization and server/player integration, followed by
+rollback-only role-matrix validation before a controlled no-auth-child run.
+
+### Actor provenance
+
+Persisted actor provenance is **not required** to secure the first guardian
+execution: the database authorizes the actor at each write and durable
+`athlete_id` identifies the subject. It is strongly desirable for later
+support/audit interpretation because current result/attempt/event rows do not
+retain which authorized profile operated the UI. It may safely be deferred if
+the product accepts that historical limitation. If introduced later, fields
+such as `started_by_profile_id` or `completed_by_profile_id` must be assigned
+inside trusted database writers from `auth.uid()`, never accepted from the
+browser. This design does not add provenance fields.
+
+### No-auth child structural result
+
+The current owner-presence checks and restrictive FKs permit all required
+family rows: a session, result, and attempt may contain non-null `athlete_id`
+with NULL `athlete_user_id`; events remain linked to the session and attempt.
+Result uniqueness remains one result per session; attempt uniqueness remains
+one attempt per canonical result; all relevant FKs are `ON DELETE RESTRICT`.
+There is no remaining table-constraint blocker. The blockers are authorization,
+read paths, and athlete-scoped browser recovery.
+
+### Proposed staged release
+
+| Subphase | Change class | Child execution possible? | Forward-only boundary may be crossed? |
+|---|---|---:|---:|
+| **6C.3A** | Review/apply a single coordinated DB authorization design for event INSERT, registration, finalization, completion self-gate removal, and immediate subject reads; retain an external release gate | No | No |
+| **6C.3B** | Version IndexedDB/checkpoint/outbox/completed-delivery by durable athlete/session/attempt; add sibling-isolation and recovery tests | No | No |
+| **6C.3C** | Update route/player/telemetry endpoint to use server-derived VIEW/ACT and durable-athlete persistence context; add focused role-matrix tests | No, while release gate remains | No |
+| **6C.3D** | Rollback-only database fixtures and production-like browser validation for self, guardian, unrelated, staff, assistant, and admin | No real child data | No |
+| **6C.3E** | Controlled deployment removes the external guardian execution gate, then performs exactly one planned parent-to-child UI run | Yes | Only at that deliberate first persisted no-auth attempt/result |
+
+Guardian execution becomes possible only in **6C.3E**, after the database,
+immediate reads, endpoint/player, and athlete-scoped persistence have all been
+validated together. The forward-only boundary may be crossed only when that
+first controlled production run creates a result or attempt where
+`athlete_id IS NOT NULL AND athlete_user_id IS NULL`. Before that point, no
+production child execution is permitted.
+
+### Required invariants
+
+- VIEW, MANAGE, and ACT remain distinct.
+- Guardian/self ACT requires an active relationship with
+  `training_permission`; coach, assistant, admin, and viewer roles do not
+  imply ACT.
+- The browser never grants athlete authority or chooses canonical ownership.
+- Session-derived durable `athlete_id` is always the subject; actor identity
+  is never substituted into it.
+- Canonical result remains completion truth; telemetry remains append-only and
+  materialization failure cannot undo completion.
+- Immutable prescriptions, Measurement V1 semantics, event sequencing,
+  idempotency/conflicts, and late-event protection remain unchanged.
+- No global active-athlete context is needed for authorization of a known
+  `/training/[sessionId]`; later family navigation may add one only as a
+  separately authorized read-context feature.
+
+---
+
 ## Phase 11B.6A — Transition Database Boundary
 
 ### Current nullability and structural blockers

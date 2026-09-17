@@ -11,7 +11,8 @@ import ExerciseVideo, { safeVideoUrl } from "./exercise-video";
 type WorkoutPlayerProps = {
   workoutName: string;
   sessionId: string;
-  userId: string;
+  actorUserId: string;
+  athleteId: string;
   workoutId: string;
   steps: WorkoutStep[];
 };
@@ -23,10 +24,10 @@ function formatClock(seconds: number) {
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
-export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutId, steps: prescribedSteps }: WorkoutPlayerProps) {
+export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, athleteId, workoutId, steps: prescribedSteps }: WorkoutPlayerProps) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
-  const input = useMemo(() => ({ workoutName, sessionId, userId, workoutId, steps: prescribedSteps }), [workoutName, sessionId, userId, workoutId, prescribedSteps]);
+  const input = useMemo(() => ({ workoutName, sessionId, actorUserId, athleteId, workoutId, steps: prescribedSteps }), [workoutName, sessionId, actorUserId, athleteId, workoutId, prescribedSteps]);
   const { checkpoint, ready, warning, run, flush, finalizeAttempt } = useWorkoutSession(input);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -48,7 +49,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutI
     savingRef.current = true; setIsSaving(true); setSaveError("");
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user || user.id !== userId) throw new Error("Unable to verify your athlete login.");
+      if (userError || !user || user.id !== actorUserId) throw new Error("Unable to verify your athlete login.");
       await completeTrainingSession(supabase, sessionId);
       // Result is committed first. Telemetry/recovery failure cannot undo it.
       await run("finalize").catch(() => {});

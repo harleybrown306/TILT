@@ -96,6 +96,7 @@ export default async function TrainingSessionPage({
       status,
       workout_id,
       team_id,
+      athlete_id,
       athlete_user_id,
       workouts (
         id,
@@ -303,7 +304,7 @@ export default async function TrainingSessionPage({
         </section>
 
         <div className="border-t border-slate-800 pt-8">
-  {isAssignedAthlete && isCompleted && !resultError && <CompletedWorkoutDelivery userId={user.id} sessionId={session.id} resultExists={Boolean(results?.length)} />}
+  {isAssignedAthlete && session.athlete_id && isCompleted && !resultError && <CompletedWorkoutDelivery actorUserId={user.id} athleteId={session.athlete_id} sessionId={session.id} resultExists={Boolean(results?.length)} />}
   {isCompleted ? (
     <div className="rounded-2xl border border-emerald-500/30 bg-slate-900 p-8">
       <h2 className="text-2xl font-semibold text-emerald-400">Workout completed</h2>
@@ -315,12 +316,13 @@ export default async function TrainingSessionPage({
       <h2 className="text-2xl font-semibold">Read-only coach view</h2>
       <p className="mt-3 text-slate-300">Review the assigned exercise sequence above. Only the assigned athlete can complete this workout.</p>
     </div>
-  ) : resultError || !prescribed ? (
+  ) : resultError || !prescribed || !session.athlete_id ? (
     <p className="text-slate-300">Unable to load the durable workout prescription. Please reload before starting.</p>
   ) : (
   <WorkoutPlayer
   workoutName={prescribed?.workoutName ?? "Assigned Workout"}
-  userId={user.id}
+  actorUserId={user.id}
+  athleteId={session.athlete_id}
   workoutId={prescription?.workout_id ?? session.workout_id}
   sessionId={session.id}
   steps={workoutSteps}

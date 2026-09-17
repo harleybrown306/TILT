@@ -1,40 +1,73 @@
 import { type Checkpoint, type Change } from "./workout-session-state";
 import { MAX_EVENT_BATCH, MAX_EVENT_BODY_BYTES, type WorkoutSessionEvent } from "./workout-session-events";
 export type QueuedEvent = { event: WorkoutSessionEvent; status: "pending" | "conflict" | "rejected" };
-export type Bundle = { userId: string; checkpoints: Record<string, Checkpoint>; outbox: QueuedEvent[]; dropped: number };
+export type Bundle = { athleteId: string; checkpoints: Record<string, Checkpoint>; outbox: QueuedEvent[]; dropped: number };
 export const MAX_OUTBOX = 2500;
-const empty = (userId: string): Bundle => ({ userId, checkpoints: {}, outbox: [], dropped: 0 });
+const empty = (athleteId: string): Bundle => ({ athleteId, checkpoints: {}, outbox: [], dropped: 0 });
 let database: Promise<IDBDatabase> | undefined;
 function db() {
   if (!database) database = new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open("tilt-workout-session-v1", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("users", { keyPath: "userId" });
+    const request = indexedDB.open("tilt-workout-session-v1", 2);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains("users")) request.result.createObjectStore("users", { keyPath: "userId" });
+      if (!request.result.objectStoreNames.contains("athletes")) request.result.createObjectStore("athletes", { keyPath: "athleteId" });
+    };
     request.onerror = () => { database = undefined; reject(request.error); };
     request.onsuccess = () => { request.result.onversionchange = () => { request.result.close(); database = undefined; }; resolve(request.result); };
   });
   return database;
 }
-export async function mutateBundle(userId: string, mutate: (bundle: Bundle) => void): Promise<Bundle> {
+type LegacyBundle = { userId?: unknown; checkpoints?: unknown; outbox?: unknown; dropped?: unknown };
+export function migrateLegacyBundle(athleteId: string, legacy: LegacyBundle | undefined): Bundle | undefined {
+  // The v1 key is an authenticated user ID. It is safely attributable only for
+  // established same-UUID athletes; no parent-keyed record is ever attached to a child.
+  if (!legacy || legacy.userId !== athleteId || !legacy.checkpoints || !Array.isArray(legacy.outbox) || !Number.isInteger(legacy.dropped)) return;
+  const checkpoints = legacy.checkpoints as Record<string, Checkpoint & { userId?: unknown }>;
+  if (Object.values(checkpoints).some((checkpoint) => !checkpoint || checkpoint.userId !== athleteId)) return;
+  return {
+    athleteId,
+    checkpoints: Object.fromEntries(Object.entries(checkpoints).map(([sessionId, checkpoint]) => {
+      const rest = { ...checkpoint };
+      delete rest.userId;
+      return [sessionId, { ...rest, athleteId }];
+    })) as Record<string, Checkpoint>,
+    outbox: legacy.outbox as QueuedEvent[],
+    dropped: legacy.dropped as number,
+  };
+}
+export async function mutateBundle(athleteId: string, mutate: (bundle: Bundle) => void): Promise<Bundle> {
   const database = await db();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction("users", "readwrite");
-    const store = transaction.objectStore("users"); let bundle: Bundle;
-    const get = store.get(userId);
+    const transaction = database.transaction(["athletes", "users"], "readwrite");
+    const store = transaction.objectStore("athletes"); const legacyStore = transaction.objectStore("users"); let bundle: Bundle;
+    const get = store.get(athleteId);
     get.onsuccess = () => {
       try {
-        bundle = get.result ?? empty(userId);
-        if (bundle.userId !== userId) throw new Error("Workout storage identity mismatch.");
-        mutate(bundle); store.put(bundle);
+        if (get.result) {
+          bundle = get.result;
+          if (bundle.athleteId !== athleteId) throw new Error("Workout storage identity mismatch.");
+          mutate(bundle); store.put(bundle);
+          return;
+        }
+        const legacy = legacyStore.get(athleteId);
+        legacy.onsuccess = () => {
+          try {
+            bundle = migrateLegacyBundle(athleteId, legacy.result) ?? empty(athleteId);
+            // Move only proven same-UUID legacy state so it cannot later be replayed.
+            if (legacy.result && bundle.outbox.length + Object.keys(bundle.checkpoints).length > 0) legacyStore.delete(athleteId);
+            mutate(bundle); store.put(bundle);
+          } catch { transaction.abort(); }
+        };
       } catch { transaction.abort(); }
     };
     transaction.oncomplete = () => resolve(bundle);
     transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error("Unable to persist workout."));
   });
 }
-export function storedCheckpoint(bundle: Bundle, userId: string, sessionId: string): Checkpoint | undefined {
+export function storedCheckpoint(bundle: Bundle, athleteId: string, sessionId: string): Checkpoint | undefined {
   const cp = bundle.checkpoints[sessionId];
   if (!cp) return;
-  if (cp.version !== 1 || cp.userId !== userId || cp.sessionId !== sessionId ||
+  if (cp.version !== 1 || cp.athleteId !== athleteId || cp.sessionId !== sessionId ||
       !Array.isArray(cp.steps) || !cp.steps.length || cp.steps.length > 200 ||
       !Number.isInteger(cp.index) || cp.index < 0 || cp.index >= cp.steps.length ||
       !Number.isFinite(cp.logicalNow) || !Number.isFinite(cp.savedWallAt) ||
@@ -79,13 +112,13 @@ export function acknowledge(bundle: Bundle, sent: WorkoutSessionEvent[], payload
   }
 }
 const flushing = new Map<string, Promise<void>>();
-export function flushEvents(userId: string, verifyUser: () => Promise<string | null>, afterAcknowledged?: (events: WorkoutSessionEvent[]) => Promise<void> | void): Promise<void> {
-  const existing = flushing.get(userId); if (existing) return existing;
+export function flushEvents(athleteId: string, actorUserId: string, verifyActor: () => Promise<string | null>, afterAcknowledged?: (events: WorkoutSessionEvent[]) => Promise<void> | void): Promise<void> {
+  const existing = flushing.get(athleteId); if (existing) return existing;
   const work = (async () => {
   try {
     for (let batchIndex = 0; batchIndex < 4; batchIndex++) {
-      if (await verifyUser() !== userId) return;
-      const bundle = await mutateBundle(userId, () => {});
+      if (await verifyActor() !== actorUserId) return;
+      const bundle = await mutateBundle(athleteId, () => {});
       const events = eventBatch(bundle); if (!events.length) return;
       const response = await fetch("/api/workout-session-events", {
         method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
@@ -93,7 +126,7 @@ export function flushEvents(userId: string, verifyUser: () => Promise<string | n
       });
       if (!response.ok) return;
       const payload: unknown = await response.json();
-      const current = await mutateBundle(userId, (current) => acknowledge(current, events, payload));
+      const current = await mutateBundle(athleteId, (current) => acknowledge(current, events, payload));
       const acknowledgements = (payload as { acknowledgements?: { id?: unknown; status?: unknown }[] }).acknowledgements ?? [];
       const accepted = events.filter((event) => acknowledgements.some((ack) => ack?.id === event.id && (ack.status === "accepted" || ack.status === "duplicate")));
       if (accepted.length) await afterAcknowledged?.(accepted);
@@ -101,7 +134,7 @@ export function flushEvents(userId: string, verifyUser: () => Promise<string | n
       if (next.length && next.every((event, index) => event.id === events[index]?.id)) return;
     }
   } catch { /* Offline/uncertain delivery retains original events. */ }
-  finally { flushing.delete(userId); }
+  finally { flushing.delete(athleteId); }
   })();
-  flushing.set(userId, work); return work;
+  flushing.set(athleteId, work); return work;
 }
