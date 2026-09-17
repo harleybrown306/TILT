@@ -43,7 +43,11 @@ function setup(options = {}) {
     teams: [{ id: teamId, name: "Test team" }],
     team_memberships: [{ team_id: teamId, user_id: coachId, role: options.role ?? "coach" },
       ...[athleteA, athleteB, athleteC].map((user_id, i) => ({ team_id: teamId, user_id, role: "athlete", profiles: { full_name: `Athlete ${i + 1}` } }))],
-    team_athlete_memberships: [athleteA, athleteB, athleteC, ...(options.includeChild ? [childAthlete] : [])].map((athlete_id) => ({ team_id: teamId, athlete_id })),
+    team_athlete_memberships: [athleteA, athleteB, athleteC, ...(options.includeChild ? [childAthlete] : [])].map((athlete_id, i) => ({
+      team_id: teamId,
+      athlete_id,
+      athletes: { id: athlete_id, display_name: athlete_id === childAthlete ? "Child Athlete" : `Athlete ${i + 1}`, graduation_year: null, status: options.archivedAthlete === athlete_id ? "archived" : "active" },
+    })),
     training_plans: [{ id: planId, owner_user_id: coachId, kind: "coach", visibility: "private", status: "active", name: "Test plan", description: null }],
     team_groups: [{ id: groupA, team_id: teamId, name: "Group A" }, { id: groupB, team_id: teamId, name: "Group B" }],
     team_group_memberships: [
@@ -60,6 +64,15 @@ function setup(options = {}) {
     rpc(name, payload) {
       calls.push({ kind: "rpc", name, payload });
       if (options.rpcThrow) return Promise.reject(Error("connection lost"));
+      if (name === "list_my_team_rostered_athlete_identities") {
+        if (options.readerError) return Promise.resolve({ data: null, error: { message: "denied" } });
+        return Promise.resolve({ data: tables.team_athlete_memberships.map((membership) => ({
+          athlete_id: membership.athlete_id,
+          display_name: membership.athletes.display_name,
+          graduation_year: membership.athletes.graduation_year,
+          status: membership.athletes.status,
+        })), error: null });
+      }
       const message = options.rpcError;
       return Promise.resolve({ data: message ? null : [{ batch_id: payload.p_batch_id, recipient_count: options.recipientCount ?? payload.p_athlete_ids.length }], error: message ? { message, code: "P0001" } : null });
     },
@@ -173,7 +186,7 @@ for (const [name, options, input] of [
   assert.equal(state.status, "error"); assert.equal(fixture.calls.filter((call) => call.kind === "rpc").length, 0);
 });
 
-test("page emits durable athlete IDs while preserving legacy names and group display", async () => {
+test("page emits durable athlete IDs and durable names while preserving legacy group display", async () => {
   const fixture = setup(); const Form = () => null;
   const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
     ...fixture.mocks, "./assignment-form": { default: Form }, "next/link": { default: () => null },
@@ -184,6 +197,22 @@ test("page emits durable athlete IDs while preserving legacy names and group dis
   const formNode = find(tree);
   assert.deepEqual(formNode.props.athletes.map((athlete) => athlete.athleteId), [athleteA, athleteB, athleteC]);
   assert.deepEqual(formNode.props.groups.map((group) => group.athleteIds), [[athleteA, athleteB], [athleteB, athleteC]]);
+  assert.deepEqual(fixture.calls.find((call) => call.kind === "rpc" && call.name === "list_my_team_rostered_athlete_identities"), {
+    kind: "rpc", name: "list_my_team_rostered_athlete_identities", payload: { p_team_id: teamId },
+  });
+});
+
+test("assignment reader supports a no-auth child for staff and excludes archived athletes", async () => {
+  const fixture = setup({ includeChild: true, archivedAthlete: athleteC, role: "assistant_coach" }); const Form = () => null;
+  const page = loadTs("src/app/teams/[teamId]/assign/page.tsx", {
+    ...fixture.mocks, "./assignment-form": { default: Form }, "next/link": { default: () => null },
+    "next/navigation": { redirect: () => { throw Error("redirect"); }, notFound: () => { throw Error("not found"); } },
+  }).default;
+  const tree = await page({ params: Promise.resolve({ teamId }) });
+  const find = (node) => !node || typeof node !== "object" ? null : node.type === Form ? node : Array.isArray(node) ? node.map(find).find(Boolean) : find(node.props?.children);
+  const formNode = find(tree);
+  assert.deepEqual(formNode.props.athletes.map((athlete) => athlete.athleteId), [athleteA, athleteB, childAthlete]);
+  assert.ok(!formNode.props.athletes.some((athlete) => athlete.athleteId === coachId));
 });
 
 test("form holds a stable hidden request UUID and uses athleteId semantics", () => {

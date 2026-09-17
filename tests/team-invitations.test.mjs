@@ -42,6 +42,10 @@ function setup(options = {}) {
       { id: staffMembership, team_id: teamId, user_id: id(11), role: "assistant_coach", profiles: { full_name: "Assistant" } },
       { id: id(12), team_id: otherTeam, user_id: athleteId, role: "athlete", profiles: { full_name: "Athlete" } },
     ],
+    team_staff_memberships: [
+      { id: id(50), team_id: teamId, profile_id: userId, role: options.managerRole ?? "coach", profiles: { full_name: "Manager" } },
+      { id: id(51), team_id: teamId, profile_id: id(11), role: "assistant_coach", profiles: { full_name: "Assistant" } },
+    ],
     team_invitations: options.pending ? [{ id: inviteId, team_id: teamId, invited_email: "athlete@example.com", role: options.inviteRole ?? "athlete", status: options.inviteStatus ?? "pending", expires_at: options.expired ? "2020-01-01T00:00:00Z" : future(), created_at: "2026-09-14T10:00:00Z" }] : [],
     profiles: [{ id: athleteId, full_name: "Athlete" }], training_sessions: [{ id: id(30), athlete_user_id: athleteId }], workout_results: [{ id: id(31), athlete_user_id: athleteId }],
   };
@@ -241,7 +245,17 @@ for (const managerRole of ["coach", "assistant_coach"]) {
   test(`roster UI permissions and old links cannot be reconstructed ${managerRole}`, async () => {
     const fixture = setup({ managerRole, pending: true, inviteRole: "assistant_coach" });
     const Form = ({ label }) => React.createElement("button", null, label);
-    const page = loadTs("src/app/teams/[teamId]/roster/page.tsx", { ...fixture.mocks, "./actions": fixture.actions, "@/components/roster-action-form": { default: Form } }).default;
+    const rosterServer = fixture.mocks["@/lib/team-roster-server"];
+    const page = loadTs("src/app/teams/[teamId]/roster/page.tsx", {
+      ...fixture.mocks,
+      "./actions": fixture.actions,
+      "@/components/roster-action-form": { default: Form },
+      "@/lib/team-roster-server": {
+        ...rosterServer,
+        loadDurableRoster: async () => [{ athleteId, displayName: "Athlete", graduationYear: null, status: "active" }],
+        loadManagedAthletes: async () => [{ athleteId, displayName: "Athlete", graduationYear: null, status: "active" }],
+      },
+    }).default;
     const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ teamId }) }));
     assert.ok(markup.includes("Invite Athlete")); assert.equal(markup.includes("Invite Assistant Coach"), managerRole === "coach"); assert.equal(markup.includes("Revoke Invitation"), managerRole === "coach");
     assert.ok(markup.includes("Athletes") && markup.includes("Assistant Coaches") && markup.includes("Pending Invitations"));

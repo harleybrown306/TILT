@@ -87,3 +87,45 @@ export async function removeMember(teamId: string, membershipId: string, state: 
     return { status: "success", message: "Member removed from this team. Other memberships and training history are unchanged." };
   } catch (cause) { return writing ? uncertain() : failure(cause); }
 }
+
+function graduationYear(value: FormDataEntryValue | null) {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || !/^\d{4}$/.test(value)) throw new Error("Graduation year must be between 2000 and 2100.");
+  const year = Number(value);
+  if (year < 2000 || year > 2100) throw new Error("Graduation year must be between 2000 and 2100.");
+  return year;
+}
+
+export async function createManagedAthlete(teamId: string, state: RosterState, data: FormData): Promise<RosterState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  try {
+    const context = await requireRosterManager(teamId);
+    const rawName = data.get("displayName");
+    if (typeof rawName !== "string") throw new Error("Enter an athlete display name.");
+    const displayName = rawName.trim();
+    if (!displayName || displayName.length > 200) throw new Error("Enter an athlete display name up to 200 characters.");
+    const { error } = await context.supabase.rpc("create_my_athlete", {
+      p_display_name: displayName,
+      p_graduation_year: graduationYear(data.get("graduationYear")),
+    });
+    if (error) throw new Error("Unable to create this athlete. Reload and try again.");
+    invalidate(teamId);
+    return { status: "success", message: "Athlete created. Add them to this team when you are ready." };
+  } catch (cause) { return failure(cause); }
+}
+
+export async function addManagedAthleteToTeam(teamId: string, state: RosterState, data: FormData): Promise<RosterState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  try {
+    const context = await requireRosterManager(teamId);
+    const athleteId = data.get("athleteId");
+    if (typeof athleteId !== "string" || !isUuid(athleteId)) throw new Error("Choose an athlete to add.");
+    const { error } = await context.supabase.rpc("add_my_managed_athlete_to_team", {
+      p_team_id: teamId,
+      p_athlete_id: athleteId,
+    });
+    if (error) throw new Error("This athlete could not be added to the team. Reload and review your permissions.");
+    invalidate(teamId);
+    return { status: "success", message: "Athlete added to this team." };
+  } catch (cause) { return failure(cause); }
+}
