@@ -56,10 +56,12 @@ export async function POST(request: Request) {
     const events = parseEventBatch(await readPayload(request));
     const sessionIds = [...new Set(events.map((event) => event.session_id))];
     const { data: sessions, error: sessionError } = await supabase.from("training_sessions")
-      .select("id").in("id", sessionIds).eq("athlete_user_id", user.id);
+      // Session RLS establishes documented VIEW. Event INSERT RLS independently
+      // establishes ACT for every event under this same authenticated caller.
+      .select("id").in("id", sessionIds);
     if (sessionError) return reply({ error: "Unable to verify sessions. Retry safely." }, 503);
     if (!sessions || sessionIds.some((id) => !sessions.some((session) => session.id === id))) {
-      return reply({ error: "Session unavailable for athlete telemetry." }, 403);
+      return reply({ error: "Session unavailable for telemetry." }, 403);
     }
 
     async function insertEvent(event: WorkoutSessionEvent): Promise<Acknowledgement> {

@@ -115,21 +115,13 @@ export default async function TrainingSessionPage({
     notFound();
   }
 
-  const isAssignedAthlete = session.athlete_user_id === user.id;
-
-  if (!isAssignedAthlete) {
-    const { data: membership, error: membershipError } = await supabase
-      .from("team_memberships")
-      .select("role")
-      .eq("team_id", session.team_id)
-      .eq("user_id", user.id)
-      .single();
-
-    if (membershipError || !membership ||
-        !["coach", "assistant_coach"].includes(membership.role)) {
-      notFound();
-    }
-  }
+  // Session RLS is the documented VIEW boundary. ACT remains a separate,
+  // current-actor capability and must fail closed without hiding VIEW data.
+  const { data: canAct, error: capabilityError } = await supabase.rpc(
+    "can_act_for_training_session",
+    { p_session_id: session.id }
+  );
+  const canActForTraining = !capabilityError && canAct === true && Boolean(session.athlete_id);
 
   const { data: results, error: resultError } = await supabase
     .from("workout_results")
@@ -184,10 +176,10 @@ export default async function TrainingSessionPage({
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-4xl">
         <Link
-          href={isAssignedAthlete ? "/" : `/teams/${session.team_id}/athletes/${session.athlete_user_id}`}
+          href={canActForTraining ? "/" : session.athlete_user_id ? `/teams/${session.team_id}/athletes/${session.athlete_user_id}` : "/"}
           className="text-sm font-medium text-emerald-400 hover:text-emerald-300"
         >
-          ← {isAssignedAthlete ? "Back to dashboard" : "Back to athlete history"}
+          ← {canActForTraining ? "Back to dashboard" : session.athlete_user_id ? "Back to athlete history" : "Back to dashboard"}
         </Link>
 
         <header className="mt-8 border-b border-slate-800 pb-8">
@@ -304,17 +296,17 @@ export default async function TrainingSessionPage({
         </section>
 
         <div className="border-t border-slate-800 pt-8">
-  {isAssignedAthlete && session.athlete_id && isCompleted && !resultError && <CompletedWorkoutDelivery actorUserId={user.id} athleteId={session.athlete_id} sessionId={session.id} resultExists={Boolean(results?.length)} />}
+  {canActForTraining && session.athlete_id && isCompleted && !resultError && <CompletedWorkoutDelivery actorUserId={user.id} athleteId={session.athlete_id} sessionId={session.id} resultExists={Boolean(results?.length)} />}
   {isCompleted ? (
     <div className="rounded-2xl border border-emerald-500/30 bg-slate-900 p-8">
       <h2 className="text-2xl font-semibold text-emerald-400">Workout completed</h2>
       <p className="mt-3 text-slate-300">This training session is complete.</p>
-      {!isAssignedAthlete && <p className="mt-3 text-slate-400">Read-only coach view.</p>}
+      {!canActForTraining && <p className="mt-3 text-slate-400">Read-only workout view.</p>}
     </div>
-  ) : !isAssignedAthlete ? (
+  ) : !canActForTraining ? (
     <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
-      <h2 className="text-2xl font-semibold">Read-only coach view</h2>
-      <p className="mt-3 text-slate-300">Review the assigned exercise sequence above. Only the assigned athlete can complete this workout.</p>
+      <h2 className="text-2xl font-semibold">Read-only workout view</h2>
+      <p className="mt-3 text-slate-300">Review the assigned exercise sequence above. Training actions are available only to an authorized athlete or guardian.</p>
     </div>
   ) : resultError || !prescribed || !session.athlete_id ? (
     <p className="text-slate-300">Unable to load the durable workout prescription. Please reload before starting.</p>

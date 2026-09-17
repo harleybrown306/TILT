@@ -273,6 +273,23 @@ parameter. Once that RPC is live, the page can render the interactive player,
 recovery, completed-delivery flushing, telemetry submission, registration,
 completion, and finalization only when its server-derived result is true.
 
+### 6C.3C application cutover
+
+After `public.can_act_for_training_session(uuid)` is live, the page loads the
+session under caller-authenticated RLS for VIEW, then independently invokes the
+public boolean RPC for ACT. A capability error fails closed for ACT while
+leaving documented VIEW intact. The page mounts `WorkoutPlayer`, recovery, and
+completed-workout delivery only when ACT is true and `session.athlete_id` is
+present. Durable `athlete_id`, never the authenticated actor, partitions the
+browser checkpoint and outbox.
+
+The telemetry route no longer filters submitted session IDs by
+`athlete_user_id = auth.uid()`. It resolves session IDs under documented VIEW
+using the caller-authenticated client; event INSERT remains independently
+authorized by database ACT RLS for each event. The browser submits no athlete
+owner field. This allows an authorized guardian actor to operate a child
+subject while a VIEW-only guardian, staff member, or admin remains read-only.
+
 ### Ownership and telemetry model
 
 The browser continues to submit only session, attempt, and append-only event

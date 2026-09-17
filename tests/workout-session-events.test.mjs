@@ -54,18 +54,18 @@ test("reject empty, unknown envelope, and oversized batch", () => {
 });
 
 function setup(options = {}) {
-  const rows = [], writes = [];
+  const rows = [], writes = [], sessionFilters = [];
   const client = {
     auth: { getUser: async () => ({ data: { user: options.signedOut ? null : { id: id(10) } }, error: null }) },
     from(table) {
       let payload, selector;
       const query = {
-        select() { return query; }, in() { return query; }, eq() { return query; },
+        select() { return query; }, in(column, values) { if (table === "training_sessions") sessionFilters.push({ type: "in", column, values }); return query; }, eq(column, value) { if (table === "training_sessions") sessionFilters.push({ type: "eq", column, value }); return query; },
         or(value) { selector = value; return query; }, limit() { return query; },
         insert(value) { payload = value; return query; },
         then(resolve, reject) {
           if (table === "training_sessions") return Promise.resolve({
-            data: options.unauthorized ? [] : [{ id: id(2) }], error: options.readFailure ? { code: "bad" } : null,
+            data: options.unauthorized ? [] : (options.sessions ?? [{ id: id(2) }]), error: options.readFailure ? { code: "bad" } : null,
           }).then(resolve, reject);
           assert.equal(table, "workout_session_events");
           if (!payload) {
@@ -92,7 +92,7 @@ function setup(options = {}) {
     "@/lib/supabase/server": { createClient: async () => client },
     "@/lib/workout-session-events": logic,
   });
-  return { post: route.POST, rows, writes };
+  return { post: route.POST, rows, writes, sessionFilters };
 }
 function request(payload = { events: [event()] }, headers = {}) {
   return new Request("http://localhost/api/workout-session-events", {
@@ -107,6 +107,16 @@ test("valid batch accepts and strips nothing beyond canonical null normalization
   const s = setup(); const response = await s.post(request());
   assert.equal(response.status, 200); assert.equal((await response.json()).acknowledgements[0].status, "accepted");
   assert.equal(s.rows.length, 1); assert.ok(!("created_at" in s.writes[0]));
+});
+test("parent actor can submit a child session without becoming its athlete owner", async () => {
+  const parent = id(10), childSession = id(2); const s = setup();
+  const payload = event({ session_id: childSession });
+  const response = await s.post(request({ events: [payload] }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(s.sessionFilters, [{ type: "in", column: "id", values: [childSession] }]);
+  assert.equal(s.writes[0].session_id, childSession);
+  assert.ok(!("athlete_user_id" in s.writes[0]));
+  assert.notEqual(parent, childSession);
 });
 test("identical retry acknowledged once; changed UUID/sequence payload conflicts without mutation", async () => {
   const s = setup(); await s.post(request());
@@ -127,10 +137,17 @@ test("batch acknowledgements retain independent successes and RLS rejections", a
   assert.deepEqual(body.acknowledgements.map((a) => a.status), ["accepted", "rejected"]);
   assert.equal(s.rows.length, 1);
 });
+test("mixed VIEW batch never acknowledges the event rejected by ACT RLS", async () => {
+  const s = setup({ rejectId: id(8), sessions: [{ id: id(2) }, { id: id(9) }] });
+  const body = await (await s.post(request({ events: [event(), event({ id: id(8), sequence: 1, session_id: id(9) })] }))).json();
+  assert.deepEqual(body.acknowledgements.map((ack) => ack.status), ["accepted", "rejected"]);
+  assert.equal(s.rows.length, 1);
+});
 test("uses existing normal SSR client without privileged credentials or history writes", () => {
   const source = readFileSync(new URL("../src/app/api/workout-session-events/route.ts", import.meta.url), "utf8");
   assert.match(source, /@\/lib\/supabase\/server/);
   assert.doesNotMatch(source, /service[_-]role|SUPABASE_SECRET|process\.env/);
+  assert.doesNotMatch(source, /\.eq\("athlete_user_id",\s*user\.id\)/);
 });
 for (const [name, payload, headers, status] of [
   ["malformed JSON", "{", {}, 400], ["unknown data", { events: [event({ metadata: {} })] }, {}, 400],

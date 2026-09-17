@@ -49,7 +49,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
     savingRef.current = true; setIsSaving(true); setSaveError("");
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user || user.id !== actorUserId) throw new Error("Unable to verify your athlete login.");
+      if (userError || !user || user.id !== actorUserId) throw new Error("Unable to verify your signed-in account.");
       await completeTrainingSession(supabase, sessionId);
       // Result is committed first. Telemetry/recovery failure cannot undo it.
       await run("finalize").catch(() => {});

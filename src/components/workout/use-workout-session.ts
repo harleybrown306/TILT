@@ -49,7 +49,7 @@ export function useWorkoutSession(input: Input) {
   }, []);
   const run = useCallback((command: Command | "begin", expected?: { index: number; phase: string; paused: boolean }) => {
     const work = busy.current.then(async () => {
-      if (activeActor.current !== input.actorUserId || (command === "begin" && await verifyActor() !== input.actorUserId)) { setWarning("Sign in with the assigned athlete account before continuing."); return; }
+      if (activeActor.current !== input.actorUserId || (command === "begin" && await verifyActor() !== input.actorUserId)) { setWarning("Your signed-in account changed. Reload before continuing."); return; }
       try {
         let createdEvents = false;
         const bundle = await mutateBundle(input.athleteId, (bundle) => {
