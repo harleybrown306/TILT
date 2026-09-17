@@ -13,6 +13,7 @@ function load(path, mocks = {}) {
  const loaded = {exports:{}}; new vm.Script(`(function(require,module,exports){${code}\n})`).runInThisContext()((name)=>name in mocks?mocks[name]:require(name),loaded,loaded.exports); return loaded.exports;
 }
 const state = load("src/lib/workout-session-state.ts");
+const completion = load("src/lib/complete-training-session.ts");
 const prescriptionMapper = load("src/lib/training-session-prescription.ts");
 const events = load("src/lib/workout-session-events.ts");
 globalThis.indexedDB = indexedDB;
@@ -71,28 +72,29 @@ function findButton(tree, label) {
  for(const child of Array.isArray(children)?children:[children]) {const found=findButton(child,label);if(found)return found;}return null;
 }
 function completionSetup(options={}) {
- const cp=command(begin().checkpoint,"recover",35000).checkpoint;const calls=[];let inserts=0;
- const client={auth:{getUser:async()=>({data:{user:{id:options.wrongUser?id(999):input.userId}},error:null})},from(table){
-  let insert=false;const q={select(){return q;},eq(){return q;},single(){return q;},limit(){return q;},insert(payload){insert=true;calls.push({type:"result",payload});return q;},then(resolve){
-   if(table==="training_sessions")return Promise.resolve({data:{athlete_user_id:input.userId,status:options.completed?"completed":"scheduled"},error:null}).then(resolve);
-   if(insert){inserts++;return Promise.resolve({error:null}).then(resolve);}return Promise.resolve({data:options.completed?[{id:id(800)}]:[],error:null}).then(resolve);
-  }};return q;
- }};
+ const cp=command(begin().checkpoint,"recover",35000).checkpoint;const calls=[];let rpcCalls=0;
+ const client={auth:{getUser:async()=>({data:{user:{id:options.wrongUser?id(999):input.userId}},error:null})},from(){
+  const q={select(){return q;},eq(){return q;},single(){return q;},limit(){return q;},then(resolve){return Promise.resolve({data:[],error:null}).then(resolve);}};return q;
+ },rpc:async(name,args)=>{rpcCalls++;calls.push({type:"result",name,args});if(options.rpcFailure)return {data:null,error:{message:"denied"}};return {data:[{result_id:id(800),already_completed:Boolean(options.completed)}],error:null}}};
  const fakeReact={...React,useMemo:fn=>fn(),useState:v=>[typeof v==="function"?v():v,()=>{}],useRef:v=>({current:v})};
  const player=load("src/components/workout/workout-player.tsx",{
   react:fakeReact,"next/navigation":{useRouter:()=>({push:path=>calls.push({type:"navigate",path}),refresh:()=>{}})},
-  "@/lib/supabase/client":{createClient:()=>client},"@/lib/workout-session-state":state,
+  "@/lib/supabase/client":{createClient:()=>client},"@/lib/complete-training-session":{completeTrainingSession:async(client,sessionId)=>{const response=await client.rpc("complete_my_training_session",{p_session_id:sessionId});if(response.error)throw Error("Unable to save workout. Retry safely.");return {resultId:response.data[0].result_id,alreadyCompleted:response.data[0].already_completed};}},"@/lib/workout-session-state":state,
   "./use-workout-session":{useWorkoutSession:()=>({checkpoint:cp,ready:true,warning:"",run:async c=>{calls.push({type:c});if(options.telemetryFailure)throw Error("offline");},flush:async()=>{},finalizeAttempt:async()=>{calls.push({type:"materialize"});if(options.materializationFailure)throw Error("offline");}})},
   "./exercise-video":{default:()=>null,safeVideoUrl:url=>url},
  });
- const tree=player.default({...input,steps:input.steps});return {button:findButton(tree,"Finish workout"),calls,inserts:()=>inserts};
+ const tree=player.default({...input,steps:input.steps});return {button:findButton(tree,"Finish workout"),calls,rpcCalls:()=>rpcCalls};
 }
-test("result INSERT and completion telemetry precede attempt materialization",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await s.button.props.onClick();assert.deepEqual(s.calls.map(c=>c.type),["result","finalize","materialize","navigate"]);assert.equal(s.calls[0].payload.active_minutes,1);assert.equal(s.calls[0].payload.result_data.completed_steps,2);}finally{globalThis.window=oldWindow;}});
-test("telemetry failure cannot block legitimate result completion",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({telemetryFailure:true});await s.button.props.onClick();assert.equal(s.inserts(),1);assert.equal(s.calls.at(-1).type,"navigate");}finally{globalThis.window=oldWindow;}});
-test("attempt materialization failure cannot block legitimate result completion",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({materializationFailure:true});await s.button.props.onClick();assert.equal(s.inserts(),1);assert.equal(s.calls.at(-1).type,"navigate");}finally{globalThis.window=oldWindow;}});
-test("existing canonical result avoids another INSERT and retries materialization",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({completed:true});await s.button.props.onClick();assert.equal(s.inserts(),0);assert.deepEqual(s.calls.map(c=>c.type),["finalize","materialize","navigate"]);}finally{globalThis.window=oldWindow;}});
-test("wrong account cannot save the athlete result",async()=>{const s=completionSetup({wrongUser:true});await s.button.props.onClick();assert.equal(s.inserts(),0);assert.equal(s.calls.length,0);});
-test("concurrent Finish clicks produce one INSERT",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await Promise.all([s.button.props.onClick(),s.button.props.onClick()]);assert.equal(s.inserts(),1);}finally{globalThis.window=oldWindow;}});
+test("canonical RPC and completion telemetry precede attempt materialization",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await s.button.props.onClick();assert.deepEqual(s.calls.map(c=>c.type),["result","finalize","materialize","navigate"]);assert.deepEqual(s.calls[0].args,{p_session_id:input.sessionId});}finally{globalThis.window=oldWindow;}});
+test("telemetry failure cannot block legitimate canonical completion",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({telemetryFailure:true});await s.button.props.onClick();assert.equal(s.rpcCalls(),1);assert.equal(s.calls.at(-1).type,"navigate");}finally{globalThis.window=oldWindow;}});
+test("attempt materialization failure cannot block legitimate canonical completion",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({materializationFailure:true});await s.button.props.onClick();assert.equal(s.rpcCalls(),1);assert.equal(s.calls.at(-1).type,"navigate");}finally{globalThis.window=oldWindow;}});
+test("already completed RPC result remains successful and retries materialization",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup({completed:true});await s.button.props.onClick();assert.equal(s.rpcCalls(),1);assert.deepEqual(s.calls.map(c=>c.type),["result","finalize","materialize","navigate"]);}finally{globalThis.window=oldWindow;}});
+test("RPC failure prevents completion telemetry",async()=>{const s=completionSetup({rpcFailure:true});await s.button.props.onClick();assert.equal(s.rpcCalls(),1);assert.equal(s.calls.some(call=>call.type==="finalize"),false);});
+test("wrong account cannot invoke canonical completion",async()=>{const s=completionSetup({wrongUser:true});await s.button.props.onClick();assert.equal(s.rpcCalls(),0);assert.equal(s.calls.length,0);});
+test("concurrent Finish clicks produce one canonical RPC call",async()=>{const oldWindow=globalThis.window;globalThis.window={setTimeout:fn=>{fn();return 0;}};try{const s=completionSetup();await Promise.all([s.button.props.onClick(),s.button.props.onClick()]);assert.equal(s.rpcCalls(),1);}finally{globalThis.window=oldWindow;}});
+test("player completion has no direct result INSERT or browser-owned result fields",()=>{const source=readFileSync(new URL("../src/components/workout/workout-player.tsx",import.meta.url),"utf8");assert.match(source,/completeTrainingSession\(supabase, sessionId\)/);assert.doesNotMatch(source,/from\("workout_results"\)\.insert|athlete_user_id: user\.id|started_at: new Date|completed_at: new Date|active_minutes:|total_duration_minutes:|exercises_completed:|result_data:/);});
+test("canonical completion helper sends only session identity and accepts idempotency",async()=>{let args;const result=await completion.completeTrainingSession({rpc:async(name,value)=>{args={name,value};return {data:[{result_id:id(801),already_completed:true}],error:null};}},input.sessionId);assert.deepEqual(args,{name:"complete_my_training_session",value:{p_session_id:input.sessionId}});assert.deepEqual(result,{resultId:id(801),alreadyCompleted:true});});
+test("canonical completion helper maps RPC failure to retry-safe UI error",async()=>{await assert.rejects(completion.completeTrainingSession({rpc:async()=>({data:null,error:{message:"database detail"}})},input.sessionId),/Unable to save workout\. Retry safely\./);});
 test("video source changes cleanly with exercise reference",()=>{const first=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/a.mp4"}));const second=renderToStaticMarkup(React.createElement(video.default,{url:"https://example.com/b.mp4"}));assert.notEqual(first,second);assert.ok(second.includes("b.mp4"));});
 
 test("server prescription mapper rejects unsupported versions and preserves snapshot semantics",()=>{

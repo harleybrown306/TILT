@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { completeTrainingSession } from "@/lib/complete-training-session";
 import { remainingMs, type WorkoutStep } from "@/lib/workout-session-state";
 import { useWorkoutSession } from "./use-workout-session";
 import ExerciseVideo, { safeVideoUrl } from "./exercise-video";
@@ -36,8 +37,6 @@ export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutI
   const currentStep = steps[currentStepIndex];
   const isPaused = checkpoint?.pausedAt != null;
   const timeRemaining = checkpoint ? Math.ceil(remainingMs(checkpoint, checkpoint.logicalNow) / 1000) : 0;
-  const activeSeconds = steps.reduce((sum, step) => sum + step.durationSeconds, 0);
-  const totalSeconds = steps.reduce((sum, step) => sum + step.durationSeconds + step.restSeconds, 0);
   const nextVideoUrl = safeVideoUrl(steps[currentStepIndex + 1]?.videoUrl);
   const expected = { index: currentStepIndex, phase, paused: isPaused };
   const storageWarning = warning ? <p role="status" className="mb-4 text-sm text-amber-300">{warning}</p> : null;
@@ -50,30 +49,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, userId, workoutI
     try {
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user || user.id !== userId) throw new Error("Unable to verify your athlete login.");
-      const { data: session, error: sessionError } = await supabase.from("training_sessions")
-        .select("athlete_user_id, status").eq("id", sessionId).single();
-      const { data: results, error: resultError } = await supabase.from("workout_results")
-        .select("id").eq("training_session_id", sessionId).limit(1);
-      if (sessionError || !session || session.athlete_user_id !== user.id || resultError) throw new Error("Unable to verify permission to complete this workout.");
-      if (session.status === "completed" || results?.length) {
-        if (results?.length) await run("finalize").catch(() => {});
-        if (results?.length) await Promise.race([finalizeAttempt().catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, 2000))]);
-        router.push(`/training/${sessionId}`); router.refresh(); return;
-      }
-      // Preserve legacy prescribed result fields; accurate attempt timing stays
-      // separate until a reviewed result/time-metric migration.
-      const { error } = await supabase.from("workout_results").insert({
-        training_session_id: sessionId, athlete_user_id: user.id,
-        started_at: new Date(checkpoint.startedAt).toISOString(), completed_at: new Date().toISOString(),
-        active_minutes: Math.ceil(activeSeconds / 60), total_duration_minutes: Math.ceil(totalSeconds / 60),
-        exercises_completed: steps.length,
-        result_data: { workout_name: checkpoint.workoutName, completed_steps: steps.length },
-      });
-      if (error) {
-        // Unique-result races and uncertain retries are resolved by canonical state.
-        const { data: saved } = await supabase.from("workout_results").select("id").eq("training_session_id", sessionId).limit(1);
-        if (!saved?.length) throw new Error("Unable to save workout. Retry to check whether it was saved.");
-      }
+      await completeTrainingSession(supabase, sessionId);
       // Result is committed first. Telemetry/recovery failure cannot undo it.
       await run("finalize").catch(() => {});
       await Promise.race([finalizeAttempt().catch(() => {}), new Promise<void>((resolve) => window.setTimeout(resolve, 2000))]);
