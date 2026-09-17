@@ -475,3 +475,18 @@ The temporary self-only authorization remains in place; guardian and no-auth
 child player execution remain blocked. The production child boundary was not
 crossed. Phase 11B.6C.2C remains blocked until this repair is reviewed,
 applied, and validated.
+
+### Phase 11B.6C.2C — retire direct authenticated result INSERT
+
+6C.2A established the canonical self-compatible completion RPC, 6C.2B moved
+the production player to that RPC, and 6C.2B.1 repaired durable attempt
+ownership. This phase removes the remaining ordinary `workout_results` INSERT
+policy and all ordinary INSERT grants. Ordinary authenticated clients cannot
+create `workout_results` directly; canonical result creation occurs only
+through the trusted `complete_my_training_session` boundary.
+
+This retirement does not alter result SELECT, the canonical completion RPC,
+attempt registration/finalization, event authorization, or the temporary
+self-only gate. Child execution remains disabled, the attempt family
+authorization cutover remains future 6C.3, and the forward-only no-auth child
+boundary remains uncrossed.
