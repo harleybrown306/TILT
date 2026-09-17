@@ -201,6 +201,29 @@ The forward-only boundary remains the first committed result or attempt with
 legacy-only rollback remains structurally possible; after it, old player and
 read/authorization paths must never be restored.
 
+### Phase 11B.6C.2 — canonical completion sequence
+
+**6C.2A** introduces `complete_my_training_session(session_id)` as a narrow
+canonical result writer. It locks the session, derives athlete ownership and
+prescription compatibility values from immutable parents, lets the existing
+result trigger synchronize session completion, and returns the existing result
+for an idempotent retry. The function has a temporary legacy-self gate:
+`session.athlete_user_id` must be non-null and equal the authenticated actor.
+That gate deliberately blocks a guardian from creating a child result through
+the public RPC before the entire execution pipeline is family-ready.
+
+`started_at` remains nullable in this RPC because no trusted start observation
+is supplied. `completed_at` is database-generated. Stored active/total minutes
+and step counts are prescription compatibility values, not measured timing.
+Actor provenance remains deferred.
+
+**6C.2B** integrates this self-compatible RPC into the player. **6C.2C** runs
+self-athlete production validation and then retires ordinary authenticated
+`workout_results` INSERT. Removing the temporary gate is a later coordinated
+release with family player authorization, attempt registration/finalization,
+telemetry authorization, and athlete-scoped IndexedDB recovery. Until then the
+forward-only no-auth-child boundary remains uncrossed.
+
 ---
 
 ## Phase 11B.6A — Transition Database Boundary
