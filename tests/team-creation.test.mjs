@@ -90,6 +90,7 @@ function setup(options = {}) {
     },
     "@/lib/team-attendance-server": { loadTeamAttendance: async (teamId) => ({ team: tables.teams.find((team) => team.id === teamId), sessions: [], athletes: [] }) },
     "@/lib/coach-attention-signals": { deriveCoachAttentionSignals: () => [] },
+    "@/lib/my-athlete-contexts-server": { loadMyFamilyAthleteContexts: async () => [], resolveActiveAthleteContext: () => ({ status: "none" }) },
     "@/lib/athlete-exercise-adherence": {
       athleteExerciseAdherenceInput: () => ({ result: null, attempt: null, prescription: null }),
     },
@@ -167,7 +168,7 @@ for (const options of [
 }
 async function dashboard(fixture) {
   const page = loadTs("src/app/page.tsx", fixture.mocks).default;
-  return renderToStaticMarkup(await page());
+  return renderToStaticMarkup(await page({ searchParams: Promise.resolve({}) }));
 }
 for (const options of [{ zeroTeams: true }, { existingRole: "athlete" }, { existingRole: "coach" }, { existingRole: "assistant_coach" }]) {
   test(`dashboard always offers Create Team ${JSON.stringify(options)}`, async () => {

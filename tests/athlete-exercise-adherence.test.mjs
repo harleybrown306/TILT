@@ -125,8 +125,8 @@ test("multiple attempts never select an arbitrary matching result attempt", () =
 
 test("the dashboard fetches durable result attempt and prescription fields without raw telemetry", () => {
   const page = readFileSync(new URL("../src/app/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /workout_results\(id,training_session_id,athlete_user_id,completed_at\)/);
-  assert.match(page, /workout_session_attempts\(workout_result_id,training_session_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks\)/);
+  assert.match(page, /workout_results\(id,training_session_id,athlete_id,completed_at\)/);
+  assert.match(page, /workout_session_attempts\(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks\)/);
   assert.match(page, /training_session_prescriptions\(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count\)/);
   assert.doesNotMatch(page, /workout_session_events/);
 });

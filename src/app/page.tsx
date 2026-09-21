@@ -19,6 +19,7 @@ import {
 } from "@/lib/exercise-adherence";
 import { attendanceStatus, formatScheduledDate, localDate, shiftDate } from "@/lib/team-attendance";
 import { createClient } from "@/lib/supabase/server";
+import { loadMyFamilyAthleteContexts, resolveActiveAthleteContext } from "@/lib/my-athlete-contexts-server";
 
 type Team = { id: string; name: string };
 type Membership = {
@@ -31,7 +32,7 @@ type Related<T> = T | T[] | null;
 type Result = {
   id: string;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string;
   completed_at: string;
 };
 type Prescription = {
@@ -44,7 +45,7 @@ type Prescription = {
 type Attempt = {
   workout_result_id: string | null;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string;
   finalization_state: string;
   measurement_version: number;
   measurement_quality: string;
@@ -55,7 +56,7 @@ type Attempt = {
 type SessionRow = {
   id: string;
   team_id: string;
-  athlete_user_id: string;
+  athlete_id: string;
   scheduled_date: string;
   status: string;
   teams: Related<Team>;
@@ -173,13 +174,18 @@ function Metric({ label, value, detail }: { label: string; value: string | numbe
   );
 }
 
-export default async function HomePage() {
+export default async function HomePage({ searchParams }: { searchParams: Promise<{ athlete?: string }> }) {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
   if (!user) redirect("/login");
+
+  const requestedAthleteId = (await searchParams).athlete;
+  const familyContexts = await loadMyFamilyAthleteContexts();
+  const athleteResolution = resolveActiveAthleteContext(familyContexts, requestedAthleteId);
+  const activeContext = athleteResolution.status === "selected" ? athleteResolution.context : null;
 
   const [
     { data: profile },
@@ -191,14 +197,14 @@ export default async function HomePage() {
       .from("team_memberships")
       .select("id,role,team_id,teams(id,name)")
       .eq("user_id", user.id),
-    supabase
+    activeContext ? supabase
       .from("training_sessions")
       .select(
-        "id,team_id,athlete_user_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
+        "id,team_id,athlete_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
-      .eq("athlete_user_id", user.id)
+      .eq("athlete_id", activeContext.athleteId)
       .order("scheduled_date", { ascending: true })
-      .order("id", { ascending: true }),
+      .order("id", { ascending: true }) : Promise.resolve({ data: [], error: null }),
   ]);
 
   if (membershipError) console.error("Unable to load memberships:", membershipError.message);
@@ -220,18 +226,18 @@ export default async function HomePage() {
         : [];
     const adherenceSource = {
       sessionId: row.id,
-      athleteId: row.athlete_user_id,
+      athleteId: row.athlete_id,
       result: result
         ? {
             id: result.id,
             trainingSessionId: result.training_session_id,
-            athleteId: result.athlete_user_id,
+            athleteId: result.athlete_id,
           }
         : null,
       attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
         workoutResultId: attempt.workout_result_id,
         trainingSessionId: attempt.training_session_id,
-        athleteId: attempt.athlete_user_id,
+        athleteId: attempt.athlete_id,
         finalizationState: attempt.finalization_state,
         measurementVersion: attempt.measurement_version,
         measurementQuality: attempt.measurement_quality,
@@ -311,11 +317,18 @@ export default async function HomePage() {
           </div>
         </header>
 
-        {athleteMemberships.length > 0 && (
+        {athleteResolution.status === "unauthorized_request" || athleteResolution.status === "ambiguous_context" ? (
+          <section className="mb-10 rounded-2xl border border-slate-800 bg-slate-900 p-6" aria-labelledby="athlete-context-error">
+            <h2 id="athlete-context-error" className="text-2xl font-semibold">Training profile unavailable</h2>
+            <p className="mt-2 text-slate-400">This training profile cannot be used with this account context.</p>
+            <Link href="/" className="mt-4 inline-block font-semibold text-emerald-400 hover:text-emerald-300">Return to dashboard</Link>
+          </section>
+        ) : activeContext && (
           <>
+            {familyContexts.length > 1 && <nav className="mb-8" aria-label="Training profile"><p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Training profile</p><div className="mt-3 flex flex-wrap gap-3">{familyContexts.map((context) => <Link key={context.athleteId} href={`/?athlete=${encodeURIComponent(context.athleteId)}`} aria-current={context.athleteId === activeContext.athleteId ? "page" : undefined} className={`rounded-lg px-4 py-2 text-sm font-semibold ${context.athleteId === activeContext.athleteId ? "bg-emerald-500 text-slate-950" : "border border-slate-700 text-slate-200 hover:bg-slate-800"}`}>{context.displayName}</Link>)}</div></nav>}
             <section id="athlete-training" className="mb-10">
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Today</p>
-              <h2 className="mt-1 text-2xl font-semibold">Today&apos;s Training</h2>
+              <h2 className="mt-1 text-2xl font-semibold">{activeContext.displayName}&apos;s Training</h2>
               <p className="mt-1 text-sm text-slate-400">What you need to complete today.</p>
               <div className="mt-4 space-y-4">
                 {todayTraining.length ? todayTraining.map((session) => (
@@ -417,7 +430,7 @@ export default async function HomePage() {
               })}
             </div>
           )}
-          {coachMemberships.length === 0 && athleteMemberships.length === 0 && <p className="mt-4 text-sm text-slate-500">Join a team or create one to get started.</p>}
+          {coachMemberships.length === 0 && !activeContext && <p className="mt-4 text-sm text-slate-500">Join a team or create one to get started.</p>}
         </section>
       </div>
     </main>

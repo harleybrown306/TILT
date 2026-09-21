@@ -48,7 +48,8 @@ test("dashboard uses immutable prescription data and excludes telemetry/result l
   const page = readFileSync(new URL("../src/app/page.tsx", import.meta.url), "utf8");
   assert.match(page, /training_session_prescriptions\(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count\)/);
   assert.doesNotMatch(page, /active_minutes|exercises_completed|workout_session_events/);
-  assert.match(page, /\.eq\("athlete_user_id", user\.id\)/);
+  assert.match(page, /\.eq\("athlete_id", activeContext\.athleteId\)/);
+  assert.doesNotMatch(page, /\.eq\("athlete_user_id", user\.id\)/);
 });
 
 test("Chicago date helper remains the dashboard timezone source", () => {
