@@ -5,6 +5,7 @@ import {
   athleteExerciseAdherenceInput,
   type AthleteAdherenceAttemptRow,
 } from "./athlete-exercise-adherence";
+import { readAllRows } from "./training-assignment";
 import type { AttendanceSession } from "./team-attendance";
 
 type Related<T> = T | T[] | null;
@@ -79,22 +80,21 @@ export async function loadTeamAttendance(teamId: string) {
   const isCoach = ["coach", "assistant_coach"].includes(membership?.role ?? "");
   if (!isCoach && profile?.platform_role !== "admin") notFound();
 
-  const [
-    { data: rawAthletes, error: athleteError },
-    { data: rawSessions, error: sessionError },
-  ] = await Promise.all([
+  const [{ data: rawAthletes, error: athleteError }, rawSessions] = await Promise.all([
     supabase.rpc("list_my_team_rostered_athlete_identities", { p_team_id: teamId }),
-    supabase
+    readAllRows<Session>((from, to) => supabase
       .from("training_sessions")
       .select(
         "id,athlete_id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
       .eq("team_id", teamId)
       .order("scheduled_date", { ascending: true })
-      .order("id", { ascending: true }),
+      .order("id", { ascending: true })
+      .range(from, to)
+    ).catch(() => null),
   ]);
 
-  if (athleteError || sessionError) {
+  if (athleteError || !rawSessions) {
     throw new Error("Unable to load team attendance.");
   }
 
