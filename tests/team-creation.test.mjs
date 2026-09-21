@@ -88,6 +88,8 @@ function setup(options = {}) {
       formatScheduledDate: (date) => date,
       attendanceStatus: (session, today) => session.completedAt || session.storedStatus === "completed" ? "completed" : session.scheduledDate > today ? "upcoming" : "pending",
     },
+    "@/lib/team-attendance-server": { loadTeamAttendance: async (teamId) => ({ team: tables.teams.find((team) => team.id === teamId), sessions: [], athletes: [] }) },
+    "@/lib/coach-attention-signals": { deriveCoachAttentionSignals: () => [] },
     "@/lib/athlete-exercise-adherence": {
       athleteExerciseAdherenceInput: () => ({ result: null, attempt: null, prescription: null }),
     },
