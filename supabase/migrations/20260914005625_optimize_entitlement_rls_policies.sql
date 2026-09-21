@@ -1,0 +1,12 @@
+drop policy entitlement_plans_admin_all on public.entitlement_plans;
+drop policy entitlement_plan_features_admin_all on public.entitlement_plan_features;
+drop policy user_entitlements_admin_all on public.user_entitlements;
+create policy entitlement_plans_admin_insert on public.entitlement_plans for insert to authenticated with check(private.is_admin((select auth.uid())));
+create policy entitlement_plans_admin_update on public.entitlement_plans for update to authenticated using(private.is_admin((select auth.uid()))) with check(private.is_admin((select auth.uid())));
+create policy entitlement_plans_admin_delete on public.entitlement_plans for delete to authenticated using(private.is_admin((select auth.uid())));
+create policy entitlement_plan_features_admin_insert on public.entitlement_plan_features for insert to authenticated with check(private.is_admin((select auth.uid())));
+create policy entitlement_plan_features_admin_update on public.entitlement_plan_features for update to authenticated using(private.is_admin((select auth.uid()))) with check(private.is_admin((select auth.uid())));
+create policy entitlement_plan_features_admin_delete on public.entitlement_plan_features for delete to authenticated using(private.is_admin((select auth.uid())));
+create policy user_entitlements_admin_insert on public.user_entitlements for insert to authenticated with check(private.is_admin((select auth.uid())));
+create policy user_entitlements_admin_update on public.user_entitlements for update to authenticated using(private.is_admin((select auth.uid()))) with check(private.is_admin((select auth.uid())));
+create policy user_entitlements_admin_delete on public.user_entitlements for delete to authenticated using(private.is_admin((select auth.uid())));

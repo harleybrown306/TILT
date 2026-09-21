@@ -1,0 +1,1 @@
+create index training_sessions_plan_item_id_idx on public.training_sessions(plan_item_id);

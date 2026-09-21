@@ -1,0 +1,2 @@
+create index team_memberships_created_by_user_id_idx
+on public.team_memberships(created_by_user_id);
