@@ -42,9 +42,10 @@ export default async function RosterPage({ params }: { params: Promise<{ teamId:
         <h2 className="text-2xl font-semibold">Managed athletes</h2>
         <p className="mt-2 text-sm text-slate-400">Create an athlete without creating an account, then add them to a team you manage.</p>
         <div className="mt-5 grid gap-6 md:grid-cols-2">
-          <RosterActionForm action={createManagedAthlete.bind(null, teamId)} label="Create athlete">
-            <label className="block font-medium">Display name<input name="displayName" required maxLength={200} className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-white" /></label>
-            <label className="block font-medium">Graduation year <span className="text-sm font-normal text-slate-400">(optional)</span><input name="graduationYear" type="number" min="2000" max="2100" inputMode="numeric" className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-white" /></label>
+          <RosterActionForm action={createManagedAthlete.bind(null, teamId)} label="Add athlete">
+            <label className="block font-medium">First name<input name="firstName" required maxLength={199} autoComplete="given-name" className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-white" /></label>
+            <label className="block font-medium">Last name<input name="lastName" required maxLength={199} autoComplete="family-name" className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-white" /></label>
+            <label className="block font-medium">Graduation year<input name="graduationYear" required type="number" min="2000" max="2100" inputMode="numeric" className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-white" /></label>
           </RosterActionForm>
           <div>
             {!managedAthletes.length ? <p className="text-slate-400">No managed athletes yet.</p> : <div className="space-y-3">{managedAthletes.map((athlete) => {

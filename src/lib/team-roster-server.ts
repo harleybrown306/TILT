@@ -8,13 +8,15 @@ export type RosterMember = {
 };
 export type DurableAthlete = {
   athleteId: string;
+  firstName: string | null;
+  lastName: string | null;
   displayName: string;
   graduationYear: number | null;
   status: string;
 };
 
-type AthleteRow = { id: string; display_name: string; graduation_year: number | null; status: string };
-type RosterIdentityRow = { athlete_id: string; display_name: string; graduation_year: number | null; status: string };
+type AthleteRow = { id: string; first_name: string | null; last_name: string | null; display_name: string; graduation_year: number | null; status: string };
+type RosterIdentityRow = { athlete_id: string; first_name: string | null; last_name: string | null; display_name: string; graduation_year: number | null; status: string };
 export async function requireRosterManager(teamId: string) {
   if (!isUuid(teamId)) throw new Error("Invalid team.");
   const supabase = await createClient();
@@ -36,6 +38,8 @@ export async function loadRoster(context: Awaited<ReturnType<typeof requireRoste
 function normalizeAthletes(rows: AthleteRow[]): DurableAthlete[] {
   return rows.map((athlete) => ({
     athleteId: athlete.id,
+    firstName: athlete.first_name,
+    lastName: athlete.last_name,
     displayName: athlete.display_name,
     graduationYear: athlete.graduation_year,
     status: athlete.status,
@@ -50,6 +54,8 @@ export async function loadDurableRoster(context: Awaited<ReturnType<typeof requi
   const identities = (data ?? []) as RosterIdentityRow[];
   return identities.map((athlete) => ({
     athleteId: athlete.athlete_id,
+    firstName: athlete.first_name,
+    lastName: athlete.last_name,
     displayName: athlete.display_name,
     graduationYear: athlete.graduation_year,
     status: athlete.status,
@@ -69,7 +75,7 @@ export async function loadManagedAthletes(context: Awaited<ReturnType<typeof req
   if (!athleteIds.length) return [];
   const athletes = await readAllRows<AthleteRow>((from, to) => context.supabase
     .from("athletes")
-    .select("id, display_name, graduation_year, status")
+    .select("id, first_name, last_name, display_name, graduation_year, status")
     .in("id", athleteIds)
     .eq("status", "active")
     .order("display_name")

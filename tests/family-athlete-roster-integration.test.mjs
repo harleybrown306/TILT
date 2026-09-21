@@ -40,27 +40,30 @@ function actionFixture({ reject = false } = {}) {
   return { actions, calls };
 }
 
-function childForm(name = "Child Athlete", year = "") {
+function childForm(firstName = "Child", lastName = "Athlete", year = "2030") {
   const form = new FormData();
-  form.set("displayName", name);
+  form.set("firstName", firstName);
+  form.set("lastName", lastName);
   form.set("graduationYear", year);
   return form;
 }
 
-test("child creation calls only the canonical creator with display fields and no actor identity", async () => {
+test("child creation calls only the canonical creator with structured fields and no actor identity", async () => {
   const { actions, calls } = actionFixture();
-  assert.equal((await actions.createManagedAthlete(teamId, idle, childForm("  Child Athlete  ", "2030"))).status, "success");
-  assert.deepEqual(calls, [{ name: "create_my_athlete", args: { p_display_name: "Child Athlete", p_graduation_year: 2030 } }]);
+  assert.equal((await actions.createManagedAthlete(teamId, idle, childForm("  Child  ", "  Athlete  ", "2030"))).status, "success");
+  assert.deepEqual(calls, [{ name: "create_my_athlete", args: { p_first_name: "Child", p_last_name: "Athlete", p_graduation_year: 2030 } }]);
   assert.equal(JSON.stringify(calls).includes(parentId), false);
 });
 
-test("child creation permits omitted graduation year and rejects invalid years before its RPC", async () => {
-  const { actions, calls } = actionFixture();
-  await actions.createManagedAthlete(teamId, idle, childForm("Child Athlete"));
-  assert.equal(calls[0].args.p_graduation_year, null);
+test("child creation requires each structured field and rejects invalid years before its RPC", async () => {
+  for (const [firstName, lastName, year] of [["", "Athlete", "2030"], ["Child", " ", "2030"], ["Child", "Athlete", ""]]) {
+    const fixture = actionFixture();
+    assert.equal((await fixture.actions.createManagedAthlete(teamId, idle, childForm(firstName, lastName, year))).status, "error");
+    assert.equal(fixture.calls.length, 0);
+  }
   for (const year of ["1999", "2101", "20x0"]) {
     const fixture = actionFixture();
-    assert.equal((await fixture.actions.createManagedAthlete(teamId, idle, childForm("Child", year))).status, "error");
+    assert.equal((await fixture.actions.createManagedAthlete(teamId, idle, childForm("Child", "Athlete", year))).status, "error");
     assert.equal(fixture.calls.length, 0);
   }
 });
@@ -90,7 +93,7 @@ test("roster and assignment use the canonical reader while managed-athlete disco
   const assignmentPage = readFileSync(root + "src/app/teams/[teamId]/assign/page.tsx", "utf8");
   assert.match(rosterServer, /from\("athlete_profile_relationships"\)[\s\S]*manage_permission/);
   assert.match(rosterServer, /rpc\("list_my_team_rostered_athlete_identities"/);
-  assert.match(rosterServer, /from\("athletes"\)[\s\S]*display_name, graduation_year, status/);
+  assert.match(rosterServer, /from\("athletes"\)[\s\S]*first_name, last_name, display_name, graduation_year, status/);
   assert.match(rosterPage, /durableAthletes\.map\(\(athlete\)/);
   assert.match(rosterPage, /managedAthletes\.map\(\(athlete\)/);
   assert.match(assignmentPage, /rpc\("list_my_team_rostered_athlete_identities"/);

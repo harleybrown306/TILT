@@ -89,23 +89,30 @@ export async function removeMember(teamId: string, membershipId: string, state: 
 }
 
 function graduationYear(value: FormDataEntryValue | null) {
-  if (value === null || value === "") return null;
+  if (value === null || value === "") throw new Error("Graduation year is required.");
   if (typeof value !== "string" || !/^\d{4}$/.test(value)) throw new Error("Graduation year must be between 2000 and 2100.");
   const year = Number(value);
   if (year < 2000 || year > 2100) throw new Error("Graduation year must be between 2000 and 2100.");
   return year;
 }
 
+function athleteName(value: FormDataEntryValue | null, field: "first" | "last") {
+  if (typeof value !== "string") throw new Error(`Enter an athlete ${field} name.`);
+  const name = value.trim();
+  if (!name) throw new Error(`Enter an athlete ${field} name.`);
+  return name;
+}
+
 export async function createManagedAthlete(teamId: string, state: RosterState, data: FormData): Promise<RosterState> {
   if (state.status === "success" || state.status === "review_required") return state;
   try {
     const context = await requireRosterManager(teamId);
-    const rawName = data.get("displayName");
-    if (typeof rawName !== "string") throw new Error("Enter an athlete display name.");
-    const displayName = rawName.trim();
-    if (!displayName || displayName.length > 200) throw new Error("Enter an athlete display name up to 200 characters.");
+    const firstName = athleteName(data.get("firstName"), "first");
+    const lastName = athleteName(data.get("lastName"), "last");
+    if (`${firstName} ${lastName}`.length > 200) throw new Error("Athlete name must be at most 200 characters.");
     const { error } = await context.supabase.rpc("create_my_athlete", {
-      p_display_name: displayName,
+      p_first_name: firstName,
+      p_last_name: lastName,
       p_graduation_year: graduationYear(data.get("graduationYear")),
     });
     if (error) throw new Error("Unable to create this athlete. Reload and try again.");

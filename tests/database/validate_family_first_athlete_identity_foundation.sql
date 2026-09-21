@@ -1,4 +1,5 @@
--- Execute only after create_family_first_athlete_identity_foundation.sql is applied.
+-- Execute only after the family-first athlete identity foundation and Phase
+-- 13B.1 structured-athlete-identity migration are applied.
 -- This validation is rollback-only and creates no persistent athlete identity.
 BEGIN;
 
@@ -164,8 +165,21 @@ BEGIN
 
   PERFORM set_config('request.jwt.claim.sub', v_profile::text, true);
   SET LOCAL ROLE authenticated;
-  SELECT public.create_my_athlete('Validation RPC child', NULL) INTO v_created;
+  SELECT public.create_my_athlete(
+    'Validation',
+    'Structured Child',
+    2034
+  ) INTO v_created;
   RESET ROLE;
+  IF NOT EXISTS (
+    SELECT 1
+    FROM public.athletes
+    WHERE id = v_created
+      AND first_name = 'Validation'
+      AND last_name = 'Structured Child'
+      AND display_name = 'Validation Structured Child'
+      AND graduation_year = 2034
+  ) THEN RAISE EXCEPTION 'Parent creation RPC did not persist structured athlete identity'; END IF;
   IF NOT EXISTS (
     SELECT 1 FROM public.athlete_profile_relationships
     WHERE athlete_id = v_created AND profile_id = v_profile AND role = 'guardian'
