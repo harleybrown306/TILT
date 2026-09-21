@@ -306,6 +306,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
             <p className="mt-3 text-slate-400">Your Time Interval Lacrosse Training dashboard.</p>
           </div>
           <div className="flex flex-wrap items-center gap-4">
+            <Link href="/athletes/new" className="font-semibold text-emerald-400">Add athlete</Link>
             {activeContext && (
               <Link href={`/training-resume?athlete=${encodeURIComponent(activeContext.athleteId)}`} className="font-semibold text-emerald-400">Training Resume</Link>
             )}
