@@ -30,7 +30,7 @@ export function teamAnalytics(sessions: AttendanceSession[], today: string, days
     completedExpected: completedExpected.length,
     missed: expected.length - completedExpected.length,
     attendance: expected.length ? Math.round((completedExpected.length / expected.length) * 100) : null,
-    activeAthletes: new Set(completed.map((session) => session.athleteUserId)).size,
+    activeAthletes: new Set(completed.map((session) => session.athleteId)).size,
   };
 }
 

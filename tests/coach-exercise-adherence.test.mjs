@@ -22,15 +22,15 @@ new vm.Script(`(function(module,exports,require){${compile(mappingSource)}})`).r
 const { athleteExerciseAdherence, athleteExerciseAdherenceInput } = mappingModule.exports;
 
 function row(overrides = {}) {
-  const result = { id: "result-1", trainingSessionId: "session-1", athleteUserId: "athlete-1" };
+  const result = { id: "result-1", trainingSessionId: "session-1", athleteId: "athlete-1" };
   return {
     sessionId: "session-1",
-    athleteUserId: "athlete-1",
+    athleteId: "athlete-1",
     result,
     attempts: [{
       workoutResultId: result.id,
       trainingSessionId: result.trainingSessionId,
-      athleteUserId: result.athleteUserId,
+      athleteId: result.athleteId,
       finalizationState: "finalized_completed",
       measurementVersion: 1,
       measurementQuality: "complete",
@@ -82,10 +82,10 @@ test("team and athlete aggregates use weighted blocks and preserve unavailable c
   const first = row();
   const second = row({
     sessionId: "session-2",
-    athleteUserId: "athlete-2",
-    result: { id: "result-2", trainingSessionId: "session-2", athleteUserId: "athlete-2" },
+    athleteId: "athlete-2",
+    result: { id: "result-2", trainingSessionId: "session-2", athleteId: "athlete-2" },
     attempts: [{
-      workoutResultId: "result-2", trainingSessionId: "session-2", athleteUserId: "athlete-2",
+      workoutResultId: "result-2", trainingSessionId: "session-2", athleteId: "athlete-2",
       finalizationState: "finalized_completed", measurementVersion: 1, measurementQuality: "complete",
       prescribedStepCount: 2, completedWorkBlocks: 1, skippedWorkBlocks: 1,
     }],

@@ -9,7 +9,7 @@ import { shiftDate } from "./team-attendance";
 export type TrainingResumeResult = {
   id: string;
   trainingSessionId: string;
-  athleteUserId: string;
+  athleteId: string;
 };
 
 export type TrainingResumePrescription = {
@@ -21,7 +21,7 @@ export type TrainingResumePrescription = {
 
 export type TrainingResumeSession = {
   id: string;
-  athleteUserId: string;
+  athleteId: string;
   scheduledDate: string;
   result: TrainingResumeResult | null;
   prescription: TrainingResumePrescription | null;
@@ -73,7 +73,7 @@ function canonicalResult(session: TrainingResumeSession): TrainingResumeResult |
   if (
     !result ||
     result.trainingSessionId !== session.id ||
-    result.athleteUserId !== session.athleteUserId
+    result.athleteId !== session.athleteId
   ) {
     return null;
   }

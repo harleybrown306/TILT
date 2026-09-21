@@ -10,7 +10,7 @@ import {
 export type AthleteAdherenceResultRow = {
   id: string;
   trainingSessionId: string;
-  athleteUserId: string;
+  athleteId: string;
 };
 
 export type AthleteAdherenceAttemptRow = ExerciseAdherenceAttempt;
@@ -18,7 +18,7 @@ export type AthleteAdherencePrescriptionRow = ExerciseAdherencePrescription;
 
 export type AthleteAdherenceSource = {
   sessionId: string;
-  athleteUserId: string;
+  athleteId: string;
   result: AthleteAdherenceResultRow | null;
   attempts: readonly AthleteAdherenceAttemptRow[];
   prescription: AthleteAdherencePrescriptionRow | null;
@@ -30,7 +30,7 @@ export function athleteExerciseAdherenceInput(
   const result: CanonicalWorkoutResult | null =
     source.result &&
     source.result.trainingSessionId === source.sessionId &&
-    source.result.athleteUserId === source.athleteUserId
+    source.result.athleteId === source.athleteId
       ? source.result
       : null;
 

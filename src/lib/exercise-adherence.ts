@@ -1,13 +1,13 @@
 export type CanonicalWorkoutResult = {
   id: string;
   trainingSessionId: string;
-  athleteUserId: string;
+  athleteId: string;
 };
 
 export type ExerciseAdherenceAttempt = {
   workoutResultId: string | null;
   trainingSessionId: string;
-  athleteUserId: string;
+  athleteId: string;
   finalizationState: string;
   measurementVersion: number;
   measurementQuality: string;
@@ -97,7 +97,7 @@ export function calculateExerciseAdherence(
   if (
     attempt.workoutResultId !== result.id ||
     attempt.trainingSessionId !== result.trainingSessionId ||
-    attempt.athleteUserId !== result.athleteUserId ||
+    attempt.athleteId !== result.athleteId ||
     prescription.sessionId !== result.trainingSessionId ||
     attempt.finalizationState !== "finalized_completed" ||
     attempt.measurementVersion !== 1 ||

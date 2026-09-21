@@ -8,12 +8,12 @@ import {
 import type { AttendanceSession } from "./team-attendance";
 
 type Related<T> = T | T[] | null;
-type Profile = { full_name: string | null };
-type Member = { user_id: string; profiles: Related<Profile> };
+type RosteredAthlete = { athlete_id: string; display_name: string };
 type Result = {
   id: string;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string | null;
+  athlete_user_id: string | null;
   completed_at: string;
 };
 type Snapshot = {
@@ -25,7 +25,8 @@ type Snapshot = {
 type Attempt = {
   workout_result_id: string | null;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string | null;
+  athlete_user_id: string | null;
   finalization_state: string;
   measurement_version: number;
   measurement_quality: string;
@@ -36,7 +37,8 @@ type Attempt = {
 type Workout = { name: string };
 type Session = {
   id: string;
-  athlete_user_id: string;
+  athlete_id: string | null;
+  athlete_user_id: string | null;
   scheduled_date: string;
   status: string;
   workouts: Related<Workout>;
@@ -78,37 +80,36 @@ export async function loadTeamAttendance(teamId: string) {
   if (!isCoach && profile?.platform_role !== "admin") notFound();
 
   const [
-    { data: rawMembers, error: memberError },
+    { data: rawAthletes, error: athleteError },
     { data: rawSessions, error: sessionError },
   ] = await Promise.all([
-    supabase
-      .from("team_memberships")
-      .select("user_id,role,profiles!team_memberships_user_id_fkey(full_name)")
-      .eq("team_id", teamId)
-      .eq("role", "athlete"),
+    supabase.rpc("list_my_team_rostered_athlete_identities", { p_team_id: teamId }),
     supabase
       .from("training_sessions")
       .select(
-        "id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
+        "id,athlete_id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
       .eq("team_id", teamId)
       .order("scheduled_date", { ascending: true })
       .order("id", { ascending: true }),
   ]);
 
-  if (memberError || sessionError) {
+  if (athleteError || sessionError) {
     throw new Error("Unable to load team attendance.");
   }
 
-  const members = (rawMembers ?? []) as Member[];
+  const athletes = (rawAthletes ?? []) as RosteredAthlete[];
   const sessions = (rawSessions ?? []) as Session[];
   const names = new Map(
-    members.map((member) => [
-      member.user_id,
-      one(member.profiles)?.full_name ?? "Unnamed athlete",
+    athletes.map((athlete) => [
+      athlete.athlete_id,
+      athlete.display_name || "Unnamed athlete",
     ])
   );
   const normalized: AttendanceSession[] = sessions.map((session) => {
+    // athlete_id is the durable identity. The legacy user-id fallback retains
+    // pre-family records whose durable owner was not materialized.
+    const athleteId = session.athlete_id ?? session.athlete_user_id ?? "";
     const result = one(session.workout_results);
     const snapshot = one(session.training_session_prescriptions);
     const workout = one(session.workouts);
@@ -119,18 +120,18 @@ export async function loadTeamAttendance(teamId: string) {
         : [];
     const exerciseAdherenceInput = athleteExerciseAdherenceInput({
       sessionId: session.id,
-      athleteUserId: session.athlete_user_id,
+      athleteId,
       result: result
         ? {
             id: result.id,
             trainingSessionId: result.training_session_id,
-            athleteUserId: result.athlete_user_id,
+            athleteId: result.athlete_id ?? athleteId,
           }
         : null,
       attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
         workoutResultId: attempt.workout_result_id,
         trainingSessionId: attempt.training_session_id,
-        athleteUserId: attempt.athlete_user_id,
+        athleteId: attempt.athlete_id ?? athleteId,
         finalizationState: attempt.finalization_state,
         measurementVersion: attempt.measurement_version,
         measurementQuality: attempt.measurement_quality,
@@ -149,8 +150,8 @@ export async function loadTeamAttendance(teamId: string) {
 
     return {
       id: session.id,
-      athleteUserId: session.athlete_user_id,
-      athleteName: names.get(session.athlete_user_id) ?? "Former athlete",
+      athleteId,
+      athleteName: names.get(athleteId) ?? "Former athlete",
       scheduledDate: session.scheduled_date,
       storedStatus: session.status,
       workoutName: snapshot?.workout_name ?? workout?.name ?? "Assigned workout",

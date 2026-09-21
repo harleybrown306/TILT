@@ -40,11 +40,11 @@ new vm.Script(`(function(module,exports,require){${compile(mappingSource)}})`).r
 const { athleteExerciseAdherence, athleteExerciseAdherenceInput } = mappingModule.exports;
 
 function source(overrides = {}) {
-  const result = { id: "result-1", trainingSessionId: "session-1", athleteUserId: "athlete-1" };
+  const result = { id: "result-1", trainingSessionId: "session-1", athleteId: "athlete-1" };
   const attempt = {
     workoutResultId: result.id,
     trainingSessionId: "session-1",
-    athleteUserId: "athlete-1",
+    athleteId: "athlete-1",
     finalizationState: "finalized_completed",
     measurementVersion: 1,
     measurementQuality: "complete",
@@ -54,7 +54,7 @@ function source(overrides = {}) {
   };
   return {
     sessionId: "session-1",
-    athleteUserId: "athlete-1",
+    athleteId: "athlete-1",
     result,
     attempts: [attempt],
     prescription: { sessionId: "session-1", schemaVersion: 1, stepCount: 10 },
@@ -135,12 +135,12 @@ test("the seven-day summary uses weighted eligible results and reports coverage"
   const first = source();
   const second = source({
     sessionId: "session-2",
-    athleteUserId: "athlete-2",
-    result: { id: "result-2", trainingSessionId: "session-2", athleteUserId: "athlete-2" },
+    athleteId: "athlete-2",
+    result: { id: "result-2", trainingSessionId: "session-2", athleteId: "athlete-2" },
     attempts: [{
       workoutResultId: "result-2",
       trainingSessionId: "session-2",
-      athleteUserId: "athlete-2",
+      athleteId: "athlete-2",
       finalizationState: "finalized_completed",
       measurementVersion: 1,
       measurementQuality: "complete",

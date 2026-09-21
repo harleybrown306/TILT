@@ -61,13 +61,13 @@ function mapSession(row: SessionRow): TrainingResumeSession {
 
   return {
     id: row.id,
-    athleteUserId: row.athlete_user_id,
+    athleteId: row.athlete_user_id,
     scheduledDate: row.scheduled_date,
     result: result
       ? {
           id: result.id,
           trainingSessionId: result.training_session_id,
-          athleteUserId: result.athlete_user_id,
+          athleteId: result.athlete_user_id,
         }
       : null,
     prescription: prescription
@@ -81,7 +81,7 @@ function mapSession(row: SessionRow): TrainingResumeSession {
     attempts: attempts.map((attempt) => ({
       workoutResultId: attempt.workout_result_id,
       trainingSessionId: attempt.training_session_id,
-      athleteUserId: attempt.athlete_user_id,
+      athleteId: attempt.athlete_user_id,
       finalizationState: attempt.finalization_state,
       measurementVersion: attempt.measurement_version,
       measurementQuality: attempt.measurement_quality,

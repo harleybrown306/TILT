@@ -15,7 +15,7 @@ test("resume query is scoped to the authenticated athlete", () => {
 
 test("canonical result identity maps into the resume helper input", () => {
   assert.match(loader, /trainingSessionId: result\.training_session_id/);
-  assert.match(loader, /athleteUserId: result\.athlete_user_id/);
+  assert.match(loader, /athleteId: result\.athlete_user_id/);
 });
 
 test("session status is not used as resume completion truth", () => {

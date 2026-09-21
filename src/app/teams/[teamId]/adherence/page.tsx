@@ -67,7 +67,7 @@ export default async function Page({ params, searchParams }: Props) {
           <div className="space-y-3">
             {athletes.map((athlete) => {
               const athleteSummary = attendanceSummary(
-                sessions.filter((session) => session.athleteUserId === athlete.id),
+                sessions.filter((session) => session.athleteId === athlete.id),
                 today,
                 days
               );

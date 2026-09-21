@@ -220,18 +220,18 @@ export default async function HomePage() {
         : [];
     const adherenceSource = {
       sessionId: row.id,
-      athleteUserId: row.athlete_user_id,
+      athleteId: row.athlete_user_id,
       result: result
         ? {
             id: result.id,
             trainingSessionId: result.training_session_id,
-            athleteUserId: result.athlete_user_id,
+            athleteId: result.athlete_user_id,
           }
         : null,
       attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
         workoutResultId: attempt.workout_result_id,
         trainingSessionId: attempt.training_session_id,
-        athleteUserId: attempt.athlete_user_id,
+        athleteId: attempt.athlete_user_id,
         finalizationState: attempt.finalization_state,
         measurementVersion: attempt.measurement_version,
         measurementQuality: attempt.measurement_quality,

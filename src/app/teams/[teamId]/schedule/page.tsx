@@ -51,7 +51,7 @@ function Row({
         <div>
           <Link
             className="font-semibold text-emerald-400 hover:text-emerald-300"
-            href={`/teams/${teamId}/athletes/${session.athleteUserId}`}
+            href={`/teams/${teamId}/athletes/${session.athleteId}`}
           >
             {session.athleteName}
           </Link>
@@ -83,7 +83,7 @@ export default async function Page({ params, searchParams }: Props) {
   const today = localDate(new Date());
   const shown = sessions.filter(
     (session) =>
-      (!query.athlete || session.athleteUserId === query.athlete) &&
+      (!query.athlete || session.athleteId === query.athlete) &&
       (!query.status || attendanceStatus(session, today) === query.status) &&
       (!query.from || session.scheduledDate >= query.from) &&
       (!query.to || session.scheduledDate <= query.to)

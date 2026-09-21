@@ -11,7 +11,7 @@ export type AttendanceStatus =
 
 export type AttendanceSession = {
   id: string;
-  athleteUserId: string;
+  athleteId: string;
   athleteName: string;
   scheduledDate: string;
   storedStatus: string;

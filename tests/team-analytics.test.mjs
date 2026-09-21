@@ -8,7 +8,7 @@ const source = readFileSync(new URL("../src/lib/team-analytics.ts", import.meta.
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS } }).outputText;
 const runtime = { exports: {} }; new vm.Script(`(function(module,exports){${compiled}})`).runInThisContext()(runtime, runtime.exports);
 const analytics = runtime.exports, today = "2026-09-14";
-const session = (id, athlete, date, status = "completed", work = 60_000) => ({ id, athleteUserId: athlete, athleteName: athlete, scheduledDate: date, storedStatus: status, workoutName: "Frozen", completedAt: status === "completed" ? `${date}T18:00:00Z` : null, prescribedWorkMs: work });
+const session = (id, athlete, date, status = "completed", work = 60_000) => ({ id, athleteId: athlete, athleteName: athlete, scheduledDate: date, storedStatus: status, workoutName: "Frozen", completedAt: status === "completed" ? `${date}T18:00:00Z` : null, prescribedWorkMs: work });
 
 test("team metrics aggregate completed snapshots and attendance from totals", () => {
   const rows = [session("a", "one", "2026-09-13", "completed", 120_000), session("b", "two", "2026-09-13", "scheduled"), session("c", "three", today, "completed", 60_000), session("d", "four", today, "scheduled"), session("e", "five", "2026-09-15", "completed", 60_000), session("f", "six", "2026-09-12", "cancelled")];

@@ -32,7 +32,7 @@ export default async function TeamAnalyticsPage({ params, searchParams }: Props)
   const teamExerciseAdherence = adherenceFor(sessions);
   const max = Math.max(...trend.map((item) => item.prescribedWorkMs), 1);
   const athleteRows = athletes.map((athlete) => {
-    const athleteSessions = sessions.filter((session) => session.athleteUserId === athlete.id);
+    const athleteSessions = sessions.filter((session) => session.athleteId === athlete.id);
     return {
       athlete,
       metrics: teamAnalytics(athleteSessions, today, days),

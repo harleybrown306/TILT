@@ -14,10 +14,7 @@ type PageProps = {
   }>;
 };
 
-type Profile = {
-  id: string;
-  full_name: string | null;
-};
+type RosteredAthlete = { athlete_id: string; display_name: string };
 
 type Workout = {
   id: string;
@@ -29,7 +26,8 @@ type Related<T> = T | T[] | null;
 type Result = {
   id: string;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string | null;
+  athlete_user_id: string | null;
 };
 
 type Prescription = {
@@ -40,7 +38,8 @@ type Prescription = {
 type Attempt = {
   workout_result_id: string | null;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string | null;
+  athlete_user_id: string | null;
   finalization_state: string;
   measurement_version: number;
   measurement_quality: string;
@@ -51,7 +50,8 @@ type Attempt = {
 
 type TrainingSession = {
   id: string;
-  athlete_user_id: string;
+  athlete_id: string | null;
+  athlete_user_id: string | null;
   scheduled_date: string;
   status: string;
   workouts: Related<Workout>;
@@ -111,7 +111,7 @@ export default async function AthleteDetailPage({
 
   const [
     { data: team, error: teamError },
-    { data: athleteMembership, error: athleteError },
+    { data: rawAthletes, error: athleteError },
     { data: sessions, error: sessionError },
   ] = await Promise.all([
     supabase
@@ -120,25 +120,13 @@ export default async function AthleteDetailPage({
       .eq("id", teamId)
       .single(),
 
-    supabase
-      .from("team_memberships")
-      .select(`
-        user_id,
-        role,
-        profiles!team_memberships_user_id_fkey (
-          id,
-          full_name
-        )
-      `)
-      .eq("team_id", teamId)
-      .eq("user_id", athleteId)
-      .eq("role", "athlete")
-      .single(),
+    supabase.rpc("list_my_team_rostered_athlete_identities", { p_team_id: teamId }),
 
     supabase
       .from("training_sessions")
       .select(`
         id,
+        athlete_id,
         athlete_user_id,
         scheduled_date,
         status,
@@ -149,11 +137,13 @@ export default async function AthleteDetailPage({
         workout_results (
           id,
           training_session_id,
+          athlete_id,
           athlete_user_id
         ),
         workout_session_attempts (
           workout_result_id,
           training_session_id,
+          athlete_id,
           athlete_user_id,
           finalization_state,
           measurement_version,
@@ -168,7 +158,7 @@ export default async function AthleteDetailPage({
         )
       `)
       .eq("team_id", teamId)
-      .eq("athlete_user_id", athleteId)
+      .eq("athlete_id", athleteId)
       .order("scheduled_date", { ascending: false }),
   ]);
 
@@ -176,7 +166,11 @@ export default async function AthleteDetailPage({
     notFound();
   }
 
-  if (athleteError || !athleteMembership) {
+  const athlete = ((rawAthletes ?? []) as RosteredAthlete[]).find(
+    (candidate) => candidate.athlete_id === athleteId
+  );
+
+  if (athleteError || !athlete) {
     notFound();
   }
 
@@ -187,11 +181,8 @@ export default async function AthleteDetailPage({
     );
   }
 
-  const profile = getOne(
-    athleteMembership.profiles as Profile | Profile[] | null
-  );
-
   const athleteSessions: TrainingSessionWithAdherence[] = ((sessions ?? []) as TrainingSession[]).map((session) => {
+    const sessionAthleteId = session.athlete_id ?? session.athlete_user_id ?? athleteId;
     const result = getOne(session.workout_results);
     const prescription = getOne(session.training_session_prescriptions);
     const attempts = Array.isArray(session.workout_session_attempts)
@@ -201,18 +192,18 @@ export default async function AthleteDetailPage({
         : [];
     const adherenceInput = athleteExerciseAdherenceInput({
       sessionId: session.id,
-      athleteUserId: session.athlete_user_id,
+      athleteId: sessionAthleteId,
       result: result
         ? {
             id: result.id,
             trainingSessionId: result.training_session_id,
-            athleteUserId: result.athlete_user_id,
+            athleteId: result.athlete_id ?? sessionAthleteId,
           }
         : null,
       attempts: attempts.map((attempt): AthleteAdherenceAttemptRow => ({
         workoutResultId: attempt.workout_result_id,
         trainingSessionId: attempt.training_session_id,
-        athleteUserId: attempt.athlete_user_id,
+        athleteId: attempt.athlete_id ?? sessionAthleteId,
         finalizationState: attempt.finalization_state,
         measurementVersion: attempt.measurement_version,
         measurementQuality: attempt.measurement_quality,
@@ -266,7 +257,7 @@ export default async function AthleteDetailPage({
           </p>
 
           <h1 className="mt-2 text-4xl font-bold">
-            {profile?.full_name ?? "Unnamed athlete"}
+            {athlete.display_name || "Unnamed athlete"}
           </h1>
 
           <p className="mt-3 text-slate-400">

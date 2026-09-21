@@ -26,12 +26,12 @@ function eligibleInput(overrides = {}) {
   const result = {
     id: "result-1",
     trainingSessionId: "session-1",
-    athleteUserId: "athlete-1",
+    athleteId: "athlete-1",
   };
   const attempt = {
     workoutResultId: result.id,
     trainingSessionId: result.trainingSessionId,
-    athleteUserId: result.athleteUserId,
+    athleteId: result.athleteId,
     finalizationState: "finalized_completed",
     measurementVersion: 1,
     measurementQuality: "complete",
@@ -107,7 +107,7 @@ test("attempt, result, and prescription identity mismatches are unavailable", ()
   unavailable(attemptSessionMismatch);
 
   const athleteMismatch = eligibleInput();
-  athleteMismatch.attempt.athleteUserId = "athlete-2";
+  athleteMismatch.attempt.athleteId = "athlete-2";
   unavailable(athleteMismatch);
 
   const prescriptionSessionMismatch = eligibleInput();
@@ -169,11 +169,11 @@ test("aggregate uses weighted block totals instead of averaging percentages", ()
   first.attempt.completedWorkBlocks = 9;
   first.attempt.skippedWorkBlocks = 1;
   const second = eligibleInput({
-    result: { id: "result-2", trainingSessionId: "session-2", athleteUserId: "athlete-2" },
+    result: { id: "result-2", trainingSessionId: "session-2", athleteId: "athlete-2" },
     attempt: {
       workoutResultId: "result-2",
       trainingSessionId: "session-2",
-      athleteUserId: "athlete-2",
+      athleteId: "athlete-2",
       finalizationState: "finalized_completed",
       measurementVersion: 1,
       measurementQuality: "complete",
