@@ -16,7 +16,7 @@ function expand(fixture) {
   });
 }
 test("measurement V1 fixtures are uniquely named and expand to persisted-event shapes", () => {
-  assert.equal(document.measurement_version, 1); assert.equal(document.fixtures.length, 30);
+  assert.equal(document.measurement_version, 1); assert.equal(document.fixtures.length, 34);
   assert.equal(new Set(document.fixtures.map((fixture) => fixture.name)).size, document.fixtures.length);
   for (const fixture of document.fixtures) {
     assert.equal(typeof fixture.valid,"boolean",fixture.name); assert.ok(["emitter","mutated"].includes(fixture.origin),fixture.name); assert.ok(["complete","partial","unknown"].includes(fixture.quality),fixture.name);

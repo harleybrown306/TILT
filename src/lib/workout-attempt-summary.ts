@@ -28,7 +28,18 @@ export function summarizeWorkoutAttempt(prescription: AttemptPrescription, event
   }
   if (!starts) issues.add("missing_workout_start"); if (!terminals) issues.add("missing_workout_complete"); if (!hasCanonicalResult) issues.add("missing_result"); if (pauseStart !== null) issues.add("unpaired_pause"); if (hiddenStart !== null) issues.add("unpaired_visibility");
   if ([...completedWork].some((id)=>skippedWork.has(id)) || [...completedRest].some((id)=>skippedRest.has(id))) issues.add("completion_skip_conflict");
-  const terminalElapsed=ordered.at(-1)?.event_type === "workout_completed" ? ordered.at(-1)?.elapsed_ms ?? null : null; if (terminalElapsed !== null && terminalElapsed-pause > prescription.prescribedTotalMs) issues.add("unobserved_phase_progress");
+  // elapsed_ms is attempt wall time. Time spent on the finished guidance
+  // screen is lifecycle time, not unobserved work/rest progression.
+  const terminalElapsed=ordered.at(-1)?.event_type === "workout_completed" ? ordered.at(-1)?.elapsed_ms ?? null : null;
+  const observedGuidanceComplete = prescription.steps.every((step) =>
+    (completedWork.has(step.workoutExerciseId) || skippedWork.has(step.workoutExerciseId)) &&
+    (step.restMs === 0 || completedRest.has(step.workoutExerciseId) || skippedRest.has(step.workoutExerciseId)),
+  );
+  // A stream that ends beyond its prescribed timer window is incomplete only
+  // when it lacks the observed outcomes that establish guidance completion.
+  if (terminalElapsed !== null && terminalElapsed - pause > prescription.prescribedTotalMs && !observedGuidanceComplete) {
+    issues.add("unobserved_phase_progress");
+  }
   const quality: AttemptQuality=[...issues].some((issue)=>unknownIssues.has(issue)) ? "unknown" : issues.size ? "partial" : "complete"; const complete=quality === "complete";
   return {quality,finalizationEligible:complete && hasCanonicalResult,issues:[...issues].sort(),elapsedAttemptMs:complete?terminalElapsed:null,explicitPauseMs:complete?pause:null,workTimerProgressedMs:null,restTimerProgressedMs:null,hiddenMs:complete?hidden:null,completedWorkBlocks:completedWork.size,skippedWorkBlocks:skippedWork.size,completedRestBlocks:completedRest.size,skippedRestBlocks:skippedRest.size,firstSequence:ordered[0]?.sequence ?? null,lastSequence:ordered.at(-1)?.sequence ?? null,eventCount:ordered.length};
 }

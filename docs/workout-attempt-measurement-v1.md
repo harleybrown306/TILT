@@ -18,7 +18,7 @@ All events contain a client event UUID, session ID, attempt ID, sequence, event 
 | page_hidden / page_visible | Observational only; neither pauses the timer. |
 | workout_completed | Final event after checkpoint finalization; later player commands emit nothing. |
 
-elapsed_ms is wall time since start. It continues through explicit pause, screen lock/background, and music playback. phase_elapsed_ms is timer guidance progress: it excludes explicit paused time, resets on phase transition, and may survive recovery.
+elapsed_ms is attempt wall time since start. It continues through explicit pause, screen lock/background, music playback, and the ordinary interval after timer guidance reaches finished while the athlete reviews the completion screen. phase_elapsed_ms is timer guidance progress: it excludes explicit paused time, resets on phase transition, and may survive recovery.
 
 On a long or suspended recovery gap, the player advances guidance state but deliberately emits no fabricated completion transition. The inferred transition remains only in the checkpoint. A terminal stream can therefore lack observed phase transitions.
 
@@ -34,7 +34,7 @@ For a complete stream V1 can materialize:
 
 | Field | Derivation |
 | --- | --- |
-| elapsed_attempt_ms | elapsed_ms on the single terminal workout_completed. |
+| elapsed_attempt_ms | elapsed_ms on the single terminal workout_completed. It is lifecycle wall time, not a cap on prescribed guidance duration. |
 | explicit_pause_ms | Sum of coherent timer_paused to timer_resumed elapsed deltas; no pair means known zero. |
 | hidden_ms | Sum of coherent page_hidden to page_visible deltas; no pair means known zero. Observational only. |
 | completed/skipped work/rest blocks | Count distinct immutable step IDs carrying each terminal phase outcome. |
@@ -47,7 +47,7 @@ Deferred: exact active-timer minutes, inferred recovery duration, actual physica
 
 Quality measures telemetry evidence and is separate from result existence.
 
-* complete: exactly one start at sequence 0; one completion that is final; contiguous unique nonnegative sequences; nondecreasing elapsed_ms; valid immutable ID/position/duration; coherent pause/visibility pairs; no completion/skip contradiction for a step and phase.
+* complete: exactly one start at sequence 0; one completion that is final; contiguous unique nonnegative sequences; nondecreasing elapsed_ms; valid immutable ID/position/duration; coherent pause/visibility pairs; no completion/skip contradiction for a step and phase. If terminal wall time exceeds prescribed guidance plus explicit pause, every prescribed work and nonzero-rest block must have an observed completion or skip outcome.
 * partial: interpretable but missing a boundary, coherent pair, canonical result, or observed phase evidence. Recovery inference and finalize-while-paused are partial.
 * unknown: contradictory/corrupt facts, including terminal-not-last, duplicate start/sequence, non-monotonic elapsed, invalid snapshot, or both completion and skip for one phase block.
 

@@ -1,0 +1,7 @@
+# Measurement V1 post-guidance timing fix
+
+`workout_session_events.elapsed_ms` is documented as wall time since the attempt began. It therefore includes the ordinary interval after timer guidance reaches `finished` and before the athlete presses **Finish workout**. That interval is attempt lifecycle time; it is neither work, rest, nor explicit pause.
+
+The materializer currently rejects an otherwise structurally complete attempt when `terminal_elapsed_ms - explicit_pause_ms > prescribed_total_ms`. This migration replaces that unconditional cap with a narrow outcome-completeness check: an overage is permitted only when immutable events account for every prescribed work block and every nonzero-rest block. It continues to require the canonical result, terminal event, contiguous sequence, immutable prescription snapshots, valid phase shapes, and coherent pause/visibility pairs. It stores terminal `elapsed_ms` as `elapsed_attempt_ms`, preserving the existing V1 wall-clock definition.
+
+This is a Measurement V1 bug fix, not V2: V1 documentation and fixtures already define `elapsed_ms` as wall time. No client summary is trusted and no historical telemetry is rewritten. The second child attempt can become materializable from its existing immutable events after a separately reviewed application; the first historical child attempt remains structurally invalid because it contains a finished-phase visibility event.
