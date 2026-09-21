@@ -10,12 +10,12 @@ test("unauthenticated resume access redirects through the existing login behavio
 });
 
 test("resume query is scoped to the authenticated athlete", () => {
-  assert.match(loader, /\.eq\("athlete_user_id", user\.id\)/);
+  assert.match(loader, /\.eq\("athlete_id", athleteId\)/);
 });
 
 test("canonical result identity maps into the resume helper input", () => {
   assert.match(loader, /trainingSessionId: result\.training_session_id/);
-  assert.match(loader, /athleteId: result\.athlete_user_id/);
+  assert.match(loader, /athleteId: result\.athlete_id/);
 });
 
 test("session status is not used as resume completion truth", () => {

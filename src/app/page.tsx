@@ -211,7 +211,6 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   if (sessionError) console.error("Unable to load training sessions:", sessionError.message);
 
   const teamMemberships = (memberships ?? []) as Membership[];
-  const athleteMemberships = teamMemberships.filter((membership) => membership.role === "athlete");
   const coachMemberships = teamMemberships.filter(
     (membership) => membership.role === "coach" || membership.role === "assistant_coach"
   );
@@ -307,8 +306,8 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
             <p className="mt-3 text-slate-400">Your Time Interval Lacrosse Training dashboard.</p>
           </div>
           <div className="flex flex-wrap items-center gap-4">
-            {athleteMemberships.length > 0 && (
-              <Link href="/training-resume" className="font-semibold text-emerald-400">Training Resume</Link>
+            {activeContext && (
+              <Link href={`/training-resume?athlete=${encodeURIComponent(activeContext.athleteId)}`} className="font-semibold text-emerald-400">Training Resume</Link>
             )}
             {profile?.platform_role === "admin" && (
               <Link href="/admin" className="font-semibold text-emerald-400">Admin</Link>

@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { loadMyTrainingResume } from "@/lib/training-resume-server";
+import { loadTrainingResumeForAthlete } from "@/lib/training-resume-server";
+import { loadMyFamilyAthleteContexts, resolveActiveAthleteContext } from "@/lib/my-athlete-contexts-server";
 
 function formatDuration(milliseconds: number) {
   const minutes = Math.round(milliseconds / 60_000);
@@ -36,14 +37,19 @@ function Metric({ label, value, detail }: { label: string; value: string | numbe
   );
 }
 
-export default async function TrainingResumePage() {
-  const resume = await loadMyTrainingResume();
+export default async function TrainingResumePage({ searchParams }: { searchParams: Promise<{ athlete?: string }> }) {
+  const requestedAthleteId = (await searchParams).athlete;
+  const resolution = resolveActiveAthleteContext(await loadMyFamilyAthleteContexts(), requestedAthleteId);
+  if (resolution.status === "unauthorized_request" || resolution.status === "ambiguous_context") return <main className="min-h-screen bg-slate-950 px-6 py-10 text-white"><div className="mx-auto max-w-6xl"><h1 className="text-2xl font-semibold">Training profile unavailable</h1><p className="mt-2 text-slate-400">This training profile cannot be used with this account context.</p><Link href="/" className="mt-4 inline-block text-emerald-400">Return to dashboard</Link></div></main>;
+  if (resolution.status === "none") return <main className="min-h-screen bg-slate-950 px-6 py-10 text-white"><div className="mx-auto max-w-6xl"><h1 className="text-2xl font-semibold">No training profile available</h1><Link href="/" className="mt-4 inline-block text-emerald-400">Return to dashboard</Link></div></main>;
+  const activeAthleteId = resolution.context.athleteId;
+  const resume = await loadTrainingResumeForAthlete(activeAthleteId);
   const { overview, prescribedTrainingTime, streaks, exerciseAdherence, history } = resume;
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-6xl">
-        <Link href="/" className="text-sm font-medium text-emerald-400 hover:text-emerald-300">
+        <Link href={`/?athlete=${encodeURIComponent(activeAthleteId)}`} className="text-sm font-medium text-emerald-400 hover:text-emerald-300">
           ← Back to dashboard
         </Link>
 

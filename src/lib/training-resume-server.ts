@@ -13,7 +13,7 @@ type Related<T> = T | T[] | null;
 type Result = {
   id: string;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string;
 };
 
 type Prescription = {
@@ -26,7 +26,7 @@ type Prescription = {
 type Attempt = {
   workout_result_id: string | null;
   training_session_id: string;
-  athlete_user_id: string;
+  athlete_id: string;
   finalization_state: string;
   measurement_version: number;
   measurement_quality: string;
@@ -37,7 +37,7 @@ type Attempt = {
 
 type SessionRow = {
   id: string;
-  athlete_user_id: string;
+  athlete_id: string;
   scheduled_date: string;
   workout_results: Related<Result>;
   training_session_prescriptions: Related<Prescription>;
@@ -61,13 +61,13 @@ function mapSession(row: SessionRow): TrainingResumeSession {
 
   return {
     id: row.id,
-    athleteId: row.athlete_user_id,
+    athleteId: row.athlete_id,
     scheduledDate: row.scheduled_date,
     result: result
       ? {
           id: result.id,
           trainingSessionId: result.training_session_id,
-          athleteId: result.athlete_user_id,
+          athleteId: result.athlete_id,
         }
       : null,
     prescription: prescription
@@ -81,7 +81,7 @@ function mapSession(row: SessionRow): TrainingResumeSession {
     attempts: attempts.map((attempt) => ({
       workoutResultId: attempt.workout_result_id,
       trainingSessionId: attempt.training_session_id,
-      athleteId: attempt.athlete_user_id,
+      athleteId: attempt.athlete_id,
       finalizationState: attempt.finalization_state,
       measurementVersion: attempt.measurement_version,
       measurementQuality: attempt.measurement_quality,
@@ -92,7 +92,7 @@ function mapSession(row: SessionRow): TrainingResumeSession {
   };
 }
 
-export async function loadMyTrainingResume(): Promise<TrainingResumeSummary> {
+export async function loadTrainingResumeForAthlete(athleteId: string): Promise<TrainingResumeSummary> {
   const supabase = await createClient();
   const {
     data: { user },
@@ -105,9 +105,9 @@ export async function loadMyTrainingResume(): Promise<TrainingResumeSummary> {
     const { data, error } = await supabase
       .from("training_sessions")
       .select(
-        "id,athlete_user_id,scheduled_date,workout_results(id,training_session_id,athlete_user_id),training_session_prescriptions(session_id,schema_version,prescribed_work_ms,step_count),workout_session_attempts(workout_result_id,training_session_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)",
+        "id,athlete_id,scheduled_date,workout_results(id,training_session_id,athlete_id),training_session_prescriptions(session_id,schema_version,prescribed_work_ms,step_count),workout_session_attempts(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)",
       )
-      .eq("athlete_user_id", user.id)
+      .eq("athlete_id", athleteId)
       .order("scheduled_date", { ascending: true })
       .order("id", { ascending: true })
       .range(from, from + PAGE_SIZE - 1);
