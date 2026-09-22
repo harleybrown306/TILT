@@ -23,6 +23,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "fake-indexeddb": "^6.2.5",
+    "pg": "^8.23.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
