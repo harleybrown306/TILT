@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import FamilyInvitationActionForm from "@/components/family-invitation-action-form";
 import RosterActionForm from "@/components/roster-action-form";
 import { readAllRows } from "@/lib/training-assignment";
+import { familyInvitationStatus, type FamilyInvitationSummary } from "@/lib/family-team-invitations";
 import { canManageInvitation, effectiveInvitationStatus, formatInvitationDate } from "@/lib/team-invitations";
 import { loadDurableRoster, loadManagedAthletes, loadRoster, requireRosterManager, type DurableAthlete, type RosterMember } from "@/lib/team-roster-server";
-import { addManagedAthleteToTeam, createInvitation, createManagedAthlete, revokeInvitation } from "./actions";
+import { addManagedAthleteToTeam, createFamilyInvitation, createInvitation, createManagedAthlete, revokeFamilyInvitation, revokeInvitation } from "./actions";
 
 type PendingInvitation = { id: string; invited_email: string; role: string; status: string; created_at: string; expires_at: string };
+type FamilyInvitation = { id: string; invited_email: string; status: FamilyInvitationSummary["invitation_status"]; created_at: string; expires_at: string };
 function nameOf(member: RosterMember) {
   const profile = Array.isArray(member.profiles) ? member.profiles[0] : member.profiles;
   return profile?.full_name || "Unnamed member";
@@ -15,13 +18,15 @@ export default async function RosterPage({ params }: { params: Promise<{ teamId:
   const { teamId } = await params;
   const context = await requireRosterManager(teamId).catch(() => null);
   if (!context) redirect("/");
-  let members: RosterMember[] = [], invitations: PendingInvitation[] = [], durableAthletes: DurableAthlete[] = [], managedAthletes: DurableAthlete[] = [];
+  let members: RosterMember[] = [], invitations: PendingInvitation[] = [], familyInvitations: FamilyInvitation[] = [], durableAthletes: DurableAthlete[] = [], managedAthletes: DurableAthlete[] = [];
   let failed = false;
   try {
-    [members, invitations, durableAthletes, managedAthletes] = await Promise.all([
+    [members, invitations, familyInvitations, durableAthletes, managedAthletes] = await Promise.all([
       loadRoster(context),
       readAllRows<PendingInvitation>((from, to) => context.supabase.from("team_invitations")
         .select("id, invited_email, role, status, created_at, expires_at").eq("team_id", teamId).eq("status", "pending").order("created_at").order("id").range(from, to)),
+      readAllRows<FamilyInvitation>((from, to) => context.supabase.from("family_team_invitations")
+        .select("id, invited_email, status, created_at, expires_at").eq("team_id", teamId).order("created_at").order("id").range(from, to)),
       loadDurableRoster(context),
       loadManagedAthletes(context),
     ]);
@@ -38,6 +43,21 @@ export default async function RosterPage({ params }: { params: Promise<{ teamId:
       </div>)}
     </section>
     {failed ? <p role="alert" className="text-rose-300">Unable to load roster or invitations. Reload before managing this team.</p> : <>
+      <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+        <h2 className="text-2xl font-semibold">Invite a family</h2>
+        <p className="mt-2 text-sm text-slate-400">Send a parent or guardian a link so they can choose the athlete joining this team.</p>
+        <div className="mt-5 max-w-xl"><FamilyInvitationActionForm action={createFamilyInvitation.bind(null, teamId)} label="Create family invitation" resetHref={`/teams/${teamId}/roster`}>
+          <label className="block font-medium">Parent or guardian email<input name="email" type="email" required maxLength={254} autoComplete="email" className="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 p-3 text-white" /></label>
+        </FamilyInvitationActionForm></div>
+        <div className="mt-8 border-t border-slate-800 pt-6"><h3 className="text-lg font-semibold">Family invitations</h3>
+          {!familyInvitations.length ? <p className="mt-3 text-sm text-slate-400">No family invitations yet.</p> : <div className="mt-4 space-y-3">{familyInvitations.map((invitation) => {
+            const status = familyInvitationStatus({ invitation_status: invitation.status, expires_at: invitation.expires_at });
+            return <article key={invitation.id} className="rounded-xl border border-slate-700 bg-slate-950 p-4"><p className="font-medium">{invitation.invited_email}</p><p className="mt-1 text-sm capitalize text-slate-400">{status} · Expires {formatInvitationDate(invitation.expires_at)}</p>
+              {status === "pending" && <div className="mt-3"><FamilyInvitationActionForm action={revokeFamilyInvitation.bind(null, teamId, invitation.id)} label="Revoke invitation" confirmation="Revoke this family invitation? The link will stop working." /></div>}
+            </article>;
+          })}</div>}
+        </div>
+      </section>
       <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
         <h2 className="text-2xl font-semibold">Managed athletes</h2>
         <p className="mt-2 text-sm text-slate-400">Create an athlete without creating an account, then add them to a team you manage.</p>

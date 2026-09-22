@@ -94,6 +94,10 @@ function setup(options = {}) {
   };
   const mocks = {
     "server-only": {}, "@/lib/supabase/server": { createClient: async () => client }, "@/lib/training-assignment": assignment, "@/lib/team-invitations": logic,
+    "@/lib/family-team-invitations": { familyInvitationError: () => "Family invitation unavailable", familyInvitationPath: (raw) => `/family-invite/${raw}`, normalizeFamilyInvitationEmail: (value) => {
+      if (typeof value !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) throw Error("Enter a valid email address.");
+      return value.trim().toLowerCase();
+    } },
     "next/cache": { revalidatePath: (path) => invalidations.push(path) },
     "next/navigation": { redirect: (path) => { throw Error(`REDIRECT:${path}`); } },
     "next/link": { default: (props) => React.createElement("a", props) },
@@ -248,8 +252,10 @@ for (const managerRole of ["coach", "assistant_coach"]) {
     const rosterServer = fixture.mocks["@/lib/team-roster-server"];
     const page = loadTs("src/app/teams/[teamId]/roster/page.tsx", {
       ...fixture.mocks,
-      "./actions": fixture.actions,
+      "./actions": { ...fixture.actions, createFamilyInvitation: async () => ({ status: "idle", message: "" }), revokeFamilyInvitation: async () => ({ status: "idle", message: "" }) },
+      "@/components/family-invitation-action-form": { default: Form },
       "@/components/roster-action-form": { default: Form },
+      "@/lib/family-team-invitations": { familyInvitationStatus: (invitation) => invitation.status },
       "@/lib/team-roster-server": {
         ...rosterServer,
         loadDurableRoster: async () => [{ athleteId, displayName: "Athlete", graduationYear: null, status: "active" }],

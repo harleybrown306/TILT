@@ -2,6 +2,8 @@
 
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
+import type { FamilyInvitationActionState } from "@/components/family-invitation-action-form";
+import { familyInvitationError, familyInvitationPath, normalizeFamilyInvitationEmail } from "@/lib/family-team-invitations";
 import { isUuid } from "@/lib/training-assignment";
 import { canManageInvitation, canRemoveMember, normalizeInvitationEmail, type InvitationRole, type RosterState } from "@/lib/team-invitations";
 import { requireRosterManager } from "@/lib/team-roster-server";
@@ -135,4 +137,49 @@ export async function addManagedAthleteToTeam(teamId: string, state: RosterState
     invalidate(teamId);
     return { status: "success", message: "Athlete added to this team." };
   } catch (cause) { return failure(cause); }
+}
+
+const familyInvitationReview = (): FamilyInvitationActionState => ({ status: "review_required", message: "The invitation could not be confirmed. Reload and review the family invitations before trying again." });
+
+export async function createFamilyInvitation(teamId: string, state: FamilyInvitationActionState, data: FormData): Promise<FamilyInvitationActionState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  let writing = false;
+  try {
+    const context = await requireRosterManager(teamId);
+    const email = normalizeFamilyInvitationEmail(data.get("email"));
+    if (email === context.user.email?.toLowerCase()) return { status: "error", message: "Use the parent or guardian’s email address." };
+    const token = randomBytes(48).toString("base64url");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+    writing = true;
+    const { data: created, error, status } = await context.supabase.rpc("create_family_team_invitation", {
+      p_team_id: teamId,
+      p_invited_email: email,
+      p_token_hash: tokenHash,
+      p_expires_at: expiresAt,
+    });
+    if (error || !created?.[0]?.invitation_id || typeof created[0].expires_at !== "string") {
+      if (!error || !definiteRejection(status)) return familyInvitationReview();
+      return { status: "error", message: familyInvitationError() };
+    }
+    invalidate(teamId);
+    return { status: "success", message: "Family invitation created. Copy the link now; it cannot be reconstructed later.", invitationPath: familyInvitationPath(token), email, expiresAt: created[0].expires_at };
+  } catch (cause) {
+    if (writing) return familyInvitationReview();
+    return { status: "error", message: cause instanceof Error && cause.message === "Enter a valid email address." ? cause.message : familyInvitationError() };
+  }
+}
+
+export async function revokeFamilyInvitation(teamId: string, invitationId: string, state: FamilyInvitationActionState): Promise<FamilyInvitationActionState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  try {
+    const context = await requireRosterManager(teamId);
+    if (!isUuid(invitationId)) return { status: "error", message: "This invitation is unavailable." };
+    const { error, status } = await context.supabase.rpc("revoke_family_team_invitation", { p_invitation_id: invitationId });
+    if (error) return !definiteRejection(status) ? familyInvitationReview() : { status: "error", message: "This invitation could not be revoked. Reload and review the invitation list." };
+    invalidate(teamId);
+    return { status: "success", message: "Family invitation revoked." };
+  } catch {
+    return { status: "error", message: "This invitation could not be revoked. Reload and review the invitation list." };
+  }
 }

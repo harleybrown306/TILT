@@ -84,9 +84,10 @@ export async function loadMyFamilyAthleteContexts(): Promise<FamilyAthleteContex
 
   const { data, error } = await supabase
     .from("athlete_profile_relationships")
-    .select("athlete_id,role,training_permission,manage_permission,athletes!inner(id,display_name,graduation_year)")
+    .select("athlete_id,role,training_permission,manage_permission,athletes!inner(id,display_name,graduation_year,status)")
     .eq("profile_id", user.id)
     .in("role", ["self", "guardian"])
+    .eq("athletes.status", "active")
     .is("revoked_at", null);
   if (error) throw new Error("Unable to load family athlete contexts.");
 

@@ -35,6 +35,11 @@ function actionFixture({ reject = false } = {}) {
     "next/cache": { revalidatePath() {} },
     "@/lib/training-assignment": { isUuid: (value) => /^[0-9a-f-]{36}$/i.test(value) },
     "@/lib/team-invitations": { canManageInvitation() { return true; }, canRemoveMember() { return true; }, normalizeInvitationEmail(value) { return String(value); } },
+    "@/lib/family-team-invitations": {
+      familyInvitationError() { return "Family invitation unavailable"; },
+      familyInvitationPath(token) { return `/family-invite/${token}`; },
+      normalizeFamilyInvitationEmail(value) { return String(value ?? "").trim().toLowerCase(); },
+    },
     "@/lib/team-roster-server": { requireRosterManager: async () => context },
   });
   return { actions, calls };

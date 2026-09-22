@@ -1,9 +1,9 @@
-const invitationPattern = /^\/invite\/([A-Za-z0-9_-]{32,256})$/;
+const invitationPattern = /^\/(invite|family-invite)\/([A-Za-z0-9_-]{32,256})$/;
 
 /** Limits auth redirects to the small set of routes this lifecycle needs. */
 export function safeAuthContinuation(value: string | null | undefined) {
   const invitation = value?.match(invitationPattern);
-  if (invitation) return `/invite/${invitation[1]}`;
+  if (invitation) return `/${invitation[1]}/${invitation[2]}`;
   return value === "/reset-password" ? "/reset-password" : "/";
 }
 

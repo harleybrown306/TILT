@@ -125,8 +125,8 @@ test("reader behaviorally scopes active rows to the authenticated self/guardian 
   ]);
   assert.deepEqual(calls, [
     ["from", "athlete_profile_relationships"],
-    ["select", "athlete_id,role,training_permission,manage_permission,athletes!inner(id,display_name,graduation_year)"],
-    ["eq", "profile_id", "current-profile"], ["in", "role", ["self", "guardian"]], ["is", "revoked_at", null],
+    ["select", "athlete_id,role,training_permission,manage_permission,athletes!inner(id,display_name,graduation_year,status)"],
+    ["eq", "profile_id", "current-profile"], ["in", "role", ["self", "guardian"]], ["eq", "athletes.status", "active"], ["is", "revoked_at", null],
   ]);
 });
 
@@ -134,6 +134,7 @@ test("reader source excludes privileged fallbacks and uses only current-user RLS
   assert.match(source, /supabase\.auth\.getUser\(\)/);
   assert.match(source, /\.eq\("profile_id", user\.id\)/);
   assert.match(source, /\.in\("role", \["self", "guardian"\]\)/);
+  assert.match(source, /\.eq\("athletes\.status", "active"\)/);
   assert.match(source, /\.is\("revoked_at", null\)/);
   assert.doesNotMatch(source, /function loadMyFamilyAthleteContexts\([^)]/);
   assert.doesNotMatch(source, /service_role|SECURITY DEFINER|rpc\(/i);
