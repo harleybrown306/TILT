@@ -22,6 +22,10 @@ type Team = {
   name: string;
 };
 
+type Athlete = {
+  display_name: string;
+};
+
 type Exercise = {
   id: string;
   name: string;
@@ -98,6 +102,9 @@ export default async function TrainingSessionPage({
       team_id,
       athlete_id,
       athlete_user_id,
+      athletes (
+        display_name
+      ),
       workouts (
         id,
         name,
@@ -134,6 +141,15 @@ export default async function TrainingSessionPage({
 
   const workout = getOne(session.workouts as Workout | Workout[] | null);
   const team = getOne(session.teams as Team | Team[] | null);
+  const athlete = getOne(session.athletes as Athlete | Athlete[] | null);
+  const dashboardHref = session.athlete_id
+    ? `/?athlete=${encodeURIComponent(session.athlete_id)}`
+    : "/";
+  const backHref = canActForTraining
+    ? dashboardHref
+    : session.athlete_user_id
+      ? `/teams/${session.team_id}/athletes/${session.athlete_user_id}`
+      : dashboardHref;
 
   const { data: steps, error: stepsError } = await supabase
     .from("workout_exercises")
@@ -176,7 +192,7 @@ export default async function TrainingSessionPage({
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
       <div className="mx-auto max-w-4xl">
         <Link
-          href={canActForTraining ? "/" : session.athlete_user_id ? `/teams/${session.team_id}/athletes/${session.athlete_user_id}` : "/"}
+          href={backHref}
           className="text-sm font-medium text-emerald-400 hover:text-emerald-300"
         >
           ← {canActForTraining ? "Back to dashboard" : session.athlete_user_id ? "Back to athlete history" : "Back to dashboard"}
@@ -201,6 +217,12 @@ export default async function TrainingSessionPage({
             {team?.name ?? "Your team"} ·{" "}
             {formatDate(session.scheduled_date)}
           </p>
+
+          {athlete?.display_name && (
+            <p className="mt-2 text-sm font-medium text-slate-300">
+              Training for {athlete.display_name}
+            </p>
+          )}
 
           {workout?.description && (
             <p className="mt-5 max-w-2xl text-slate-300">
