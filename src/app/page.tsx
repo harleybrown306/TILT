@@ -310,6 +310,9 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
             {activeContext && (
               <Link href={`/training-resume?athlete=${encodeURIComponent(activeContext.athleteId)}`} className="font-semibold text-emerald-400">Training Resume</Link>
             )}
+            {activeContext?.relationshipRole === "guardian" && activeContext.canManage && (
+              <Link href={`/athletes/${encodeURIComponent(activeContext.athleteId)}/guardians`} className="font-semibold text-emerald-400">Manage guardians</Link>
+            )}
             {profile?.platform_role === "admin" && (
               <Link href="/admin" className="font-semibold text-emerald-400">Admin</Link>
             )}

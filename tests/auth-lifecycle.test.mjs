@@ -20,13 +20,15 @@ const token = "a".repeat(64);
 test("auth continuation accepts only invitations, recovery, and root", () => {
   assert.equal(auth.safeAuthContinuation(`/invite/${token}`), `/invite/${token}`);
   assert.equal(auth.safeAuthContinuation(`/family-invite/${token}`), `/family-invite/${token}`);
+  assert.equal(auth.safeAuthContinuation(`/guardian-invite/${token}`), `/guardian-invite/${token}`);
   assert.equal(auth.safeAuthContinuation("/reset-password"), "/reset-password");
-  for (const value of [null, "https://evil.test", "//evil.test", "/teams/new", `/invite/${token}?next=https://evil.test`, "/family-invite/", `/family-invite/${token}/extra`, "/family-invite/short", "/family-invite/%2f%2fevil.test", "/invite/short", "/invite/%2f%2fevil.test"]) assert.equal(auth.safeAuthContinuation(value), "/");
+  for (const value of [null, "https://evil.test", "//evil.test", "/teams/new", `/invite/${token}?next=https://evil.test`, "/family-invite/", `/family-invite/${token}/extra`, "/family-invite/short", "/family-invite/%2f%2fevil.test", "/guardian-invite/", `/guardian-invite/${token}/extra`, "/guardian-invite/short", "/guardian-invite/%2f%2fevil.test", `/guardian-invite/${token}#fragment`, `/guardian-invite/${token}\\evil`, `/guardian-invite/../${token}`, "/guardian-invite/%252f%252fevil.test", "/invite/short", "/invite/%2f%2fevil.test"]) assert.equal(auth.safeAuthContinuation(value), "/");
 });
 
 test("login and signup preserve only validated invitation continuation", () => {
   assert.equal(auth.authPath("/signup", `/invite/${token}`), `/signup?next=${encodeURIComponent(`/invite/${token}`)}`);
   assert.equal(auth.authPath("/login", `/family-invite/${token}`), `/login?next=${encodeURIComponent(`/family-invite/${token}`)}`);
+  assert.equal(auth.authPath("/login", `/guardian-invite/${token}`), `/login?next=${encodeURIComponent(`/guardian-invite/${token}`)}`);
   assert.equal(auth.authPath("/login", "https://evil.test"), "/login");
 });
 

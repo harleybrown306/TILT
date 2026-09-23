@@ -4,7 +4,7 @@ import { createServerClient } from "@supabase/ssr";
 import { safeAuthContinuation } from "@/lib/auth-continuation";
 
 function continuationCategory(destination: string) {
-  if (destination.startsWith("/invite/") || destination.startsWith("/family-invite/")) return "invite";
+  if (destination.startsWith("/invite/") || destination.startsWith("/family-invite/") || destination.startsWith("/guardian-invite/")) return "invite";
   if (destination === "/reset-password") return "reset";
   return "root";
 }
