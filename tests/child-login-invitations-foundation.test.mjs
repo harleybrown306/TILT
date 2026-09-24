@@ -4,13 +4,16 @@ import { readFileSync, readdirSync } from "node:fs";
 
 const migrationName = "20260923201138_create_child_login_invitation_foundation.sql";
 const sql = readFileSync(new URL(`../supabase/migrations/${migrationName}`, import.meta.url), "utf8");
+const managerAuthorizationMigrationName = "20260924182152_child_login_invitation_manager_authorization.sql";
+const managerAuthorizationSql = readFileSync(new URL(`../supabase/migrations/${managerAuthorizationMigrationName}`, import.meta.url), "utf8");
 const validator = readFileSync(new URL("database/validate_child_login_invitation_foundation.sql", import.meta.url), "utf8");
 
-test("child-login claim foundation is one canonical forward migration", () => {
+test("child-login claim foundation and C1 manager authorization are canonical forward migrations", () => {
   const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url))
     .filter((name) => /child_login_invitation/.test(name));
-  assert.deepEqual(migrations, [migrationName]);
+  assert.deepEqual(migrations, [migrationName, managerAuthorizationMigrationName]);
   assert.match(sql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
+  assert.match(managerAuthorizationSql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
 });
 
 test("claim invitations are hash-only, immutable, exactly seven days, and one pending per athlete", () => {
@@ -105,6 +108,44 @@ test("all five exact Phase 13E.A RPC contracts remain intentionally ungranted", 
   assert.doesNotMatch(sql, /CREATE UNIQUE INDEX[^;]*invited_email[^;]*WHERE status='pending'/);
 });
 
+test("C1 releases only manager RPCs with canonical MANAGE and preserves create authorization locks", () => {
+  const create = managerAuthorizationSql.slice(
+    managerAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.create_child_login_invitation"),
+    managerAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.revoke_child_login_invitation"),
+  );
+  const revoke = managerAuthorizationSql.slice(
+    managerAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.revoke_child_login_invitation"),
+    managerAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.list_my_child_login_invitations"),
+  );
+  const list = managerAuthorizationSql.slice(
+    managerAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.list_my_child_login_invitations"),
+    managerAuthorizationSql.indexOf("DROP FUNCTION private.child_login_guardian_manage"),
+  );
+
+  for (const functionSql of [create, revoke, list]) {
+    assert.match(functionSql, /SECURITY DEFINER SET search_path TO ''/);
+    assert.match(functionSql, /private\.can_manage_athlete_identity/);
+    assert.doesNotMatch(functionSql, /private\.child_login_guardian_manage/);
+  }
+  assert.match(create, /private\.child_login_claim_lock\(p_athlete_id\)[\s\S]*athletes a[\s\S]*FOR UPDATE[\s\S]*athlete_profile_relationships r[\s\S]*r\.profile_id=v_actor[\s\S]*r\.role IN \('self','guardian'\) FOR UPDATE[\s\S]*private\.can_manage_athlete_identity\(p_athlete_id\)/);
+  assert.match(create, /WHERE r\.athlete_id=p_athlete_id AND r\.role='self' FOR UPDATE/);
+  assert.match(revoke, /private\.child_login_claim_lock\(v_athlete\)[\s\S]*FOR UPDATE[\s\S]*private\.can_manage_athlete_identity\(v_i\.athlete_id\)/);
+  assert.match(list, /WHERE i\.athlete_id=p_athlete_id AND private\.can_manage_athlete_identity\(p_athlete_id\)/);
+  assert.match(managerAuthorizationSql, /DROP FUNCTION private\.child_login_guardian_manage\(uuid,uuid\);/);
+  assert.match(managerAuthorizationSql, /GRANT EXECUTE ON FUNCTION public\.create_child_login_invitation\(uuid,text,text\) TO authenticated;/);
+  assert.match(managerAuthorizationSql, /GRANT EXECUTE ON FUNCTION public\.revoke_child_login_invitation\(uuid\) TO authenticated;/);
+  assert.match(managerAuthorizationSql, /GRANT EXECUTE ON FUNCTION public\.list_my_child_login_invitations\(uuid\) TO authenticated;/);
+  assert.doesNotMatch(managerAuthorizationSql, /GRANT EXECUTE ON FUNCTION public\.(?:get_child_login_invitation_summary|accept_child_login_invitation)/);
+  for (const signature of [
+    "create_child_login_invitation(uuid,text,text)",
+    "revoke_child_login_invitation(uuid)",
+    "list_my_child_login_invitations(uuid)",
+    "get_child_login_invitation_summary(text)",
+    "accept_child_login_invitation(text)",
+  ]) assert.match(managerAuthorizationSql, new RegExp(`REVOKE ALL ON FUNCTION public\\.${signature.replace(/[()]/g, "\\$&")} FROM PUBLIC,anon,authenticated;`));
+  assert.match(managerAuthorizationSql, /REVOKE ALL ON TABLE public\.child_login_invitations FROM PUBLIC,anon,authenticated;/);
+});
+
 test("rollback validator checks security posture and claim invariants without persisting fixtures", () => {
   assert.match(validator, /(?:^|\n)BEGIN;[\s\S]*ROLLBACK;\s*$/);
   assert.match(validator, /#variable_conflict error/);
@@ -112,6 +153,9 @@ test("rollback validator checks security posture and claim invariants without pe
     "child login invitation table/RLS is missing",
     "authenticated has direct child login invitation table access",
     "child login invitation function hardening or phase grants are incorrect",
+    "C1-03 SELF=false suppresses guardian=true failed",
+    "C1-11 former inviter retained authority",
+    "SECTION C1 PASS",
     "one pending child login invitation per athlete was not enforced",
     "wrong recipient learned child identity",
     "first child self claim was not created",
@@ -122,4 +166,16 @@ test("rollback validator checks security posture and claim invariants without pe
   ]) assert.match(validator, new RegExp(phrase));
   assert.match(validator, /INSERT INTO auth\.users/);
   assert.match(validator, /v_marker text := '13ea-validator-'/);
+});
+
+test("C1 no-reclaim cases clear pending invitations and require the historical-SELF error", () => {
+  const c1 = validator.slice(
+    validator.indexOf("-- Section C1:"),
+    validator.indexOf("-- Section L:"),
+  );
+  for (const caseNumber of ["04", "05", "06"]) {
+    assert.match(c1, new RegExp(`C1-${caseNumber} seeded invitation was not revoked`));
+    assert.match(c1, new RegExp(`C1-${caseNumber}.*SQLERRM='Athlete self claim is unavailable'`));
+  }
+  assert.doesNotMatch(c1, /C1 historical SELF no-reclaim failed/);
 });
