@@ -13,23 +13,10 @@ type PageProps = {
   }>;
 };
 
-type AthleteMembership = {
-  id: string;
-  user_id: string;
-  profiles:
-    | {
-        id: string;
-        full_name: string | null;
-      }
-    | {
-        id: string;
-        full_name: string | null;
-      }[]
-    | null;
-};
+type AthleteMembership = { athlete_id: string; display_name: string; status: string };
 
 type GroupMembership = {
-  athlete_user_id: string;
+  athlete_id: string;
 };
 
 export default async function TeamGroupPage({
@@ -82,19 +69,10 @@ export default async function TeamGroupPage({
     notFound();
   }
 
-  const { data: athletes, error: athletesError } = await supabase
-    .from("team_memberships")
-    .select(`
-      id,
-      user_id,
-      profiles!team_memberships_user_id_fkey (
-        id,
-        full_name
-      )
-    `)
-    .eq("team_id", teamId)
-    .eq("role", "athlete")
-    .order("created_at", { ascending: true });
+  const { data: athletes, error: athletesError } = await supabase.rpc(
+    "list_my_team_rostered_athlete_identities",
+    { p_team_id: teamId },
+  );
 
   if (athletesError) {
     console.error(
@@ -106,7 +84,7 @@ export default async function TeamGroupPage({
   const { data: groupMemberships, error: groupMembershipError } =
     await supabase
       .from("team_group_memberships")
-      .select("athlete_user_id")
+      .select("athlete_id")
       .eq("team_group_id", groupId);
 
   if (groupMembershipError) {
@@ -118,11 +96,12 @@ export default async function TeamGroupPage({
 
   const groupMemberIds = new Set(
     ((groupMemberships ?? []) as GroupMembership[]).map(
-      (item) => item.athlete_user_id
+      (item) => item.athlete_id
     )
   );
 
-  const athleteRows = (athletes ?? []) as AthleteMembership[];
+  const athleteRows = ((athletes ?? []) as AthleteMembership[])
+    .filter((athlete) => athlete.status === "active");
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
@@ -187,22 +166,16 @@ export default async function TeamGroupPage({
           ) : (
             <div className="space-y-3">
               {athleteRows.map((athlete) => {
-                const profile = Array.isArray(athlete.profiles)
-                  ? athlete.profiles[0]
-                  : athlete.profiles;
-
-                const isMember = groupMemberIds.has(
-                  athlete.user_id
-                );
+                const isMember = groupMemberIds.has(athlete.athlete_id);
 
                 return (
                   <div
-                    key={athlete.id}
+                    key={athlete.athlete_id}
                     className="flex flex-col gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div>
                       <p className="font-semibold">
-                        {profile?.full_name ?? "Unnamed athlete"}
+                        {athlete.display_name}
                       </p>
 
                       <p className="mt-1 text-sm text-slate-400">
@@ -228,8 +201,8 @@ export default async function TeamGroupPage({
 
                         <input
                           type="hidden"
-                          name="athleteUserId"
-                          value={athlete.user_id}
+                          name="athleteId"
+                          value={athlete.athlete_id}
                         />
 
                         <button
@@ -255,8 +228,8 @@ export default async function TeamGroupPage({
 
                         <input
                           type="hidden"
-                          name="athleteUserId"
-                          value={athlete.user_id}
+                          name="athleteId"
+                          value={athlete.athlete_id}
                         />
 
                         <button

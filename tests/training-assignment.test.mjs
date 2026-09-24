@@ -51,9 +51,9 @@ function setup(options = {}) {
     training_plans: [{ id: planId, owner_user_id: coachId, kind: "coach", visibility: "private", status: "active", name: "Test plan", description: null }],
     team_groups: [{ id: groupA, team_id: teamId, name: "Group A" }, { id: groupB, team_id: teamId, name: "Group B" }],
     team_group_memberships: [
-      { team_group_id: groupA, athlete_user_id: athleteA }, { team_group_id: groupA, athlete_user_id: athleteB },
-      { team_group_id: groupB, athlete_user_id: athleteB }, { team_group_id: groupB, athlete_user_id: athleteC },
-      { team_group_id: groupB, athlete_user_id: id(999) },
+      { team_group_id: groupA, athlete_id: athleteA }, { team_group_id: groupA, athlete_id: athleteB },
+      { team_group_id: groupB, athlete_id: athleteB }, { team_group_id: groupB, athlete_id: athleteC },
+      { team_group_id: groupB, athlete_id: id(999) },
     ],
   };
   if (options.emptyGroups) { tables.team_groups = []; tables.team_group_memberships = []; }

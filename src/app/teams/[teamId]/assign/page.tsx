@@ -6,7 +6,7 @@ import AssignmentForm from "./assignment-form";
 
 type DurableRosterRow = { athlete_id: string; display_name: string; graduation_year: number | null; status: string };
 type GroupRow = { id: string; name: string };
-type GroupMemberRow = { team_group_id: string; athlete_user_id: string };
+type GroupMemberRow = { team_group_id: string; athlete_id: string };
 type PlanRow = { id: string; name: string; description: string | null };
 
 export default async function AssignTrainingPage({
@@ -69,7 +69,7 @@ export default async function AssignTrainingPage({
 
     const members = groups.length ? await readAllRows<GroupMemberRow>((from, to) => supabase
       .from("team_group_memberships")
-      .select("team_group_id, athlete_user_id")
+      .select("team_group_id, athlete_id")
       .in("team_group_id", groups.map((group) => group.id))
       .order("id")
       .range(from, to)) : [];
@@ -81,7 +81,7 @@ export default async function AssignTrainingPage({
     const memberIdsByGroup = new Map<string, string[]>();
     for (const member of members) {
       const ids = memberIdsByGroup.get(member.team_group_id) ?? [];
-      ids.push(member.athlete_user_id);
+      ids.push(member.athlete_id);
       memberIdsByGroup.set(member.team_group_id, ids);
     }
     const teamAthleteIds = athletes.map((athlete) => athlete.athleteId);

@@ -98,18 +98,15 @@ export async function assignTraining(
         return error("Every selected group must belong to this team. Reload the groups and try again.");
       }
 
-      const members = await readAllRows<{ athlete_user_id: string }>((from, to) => supabase
+      const members = await readAllRows<{ athlete_id: string }>((from, to) => supabase
         .from("team_group_memberships")
-        .select("athlete_user_id")
+        .select("athlete_id")
         .in("team_group_id", groupIds)
         .order("id")
         .range(from, to));
-      // Groups still store legacy athlete-user IDs. During this transition, a
-      // group member maps only when that same UUID is a current durable roster
-      // athlete; no guardian/coach identity can become an athlete recipient.
       groupAthleteIds = members
-        .map((member) => member.athlete_user_id)
-        .filter((legacyAthleteUserId) => eligible.has(legacyAthleteUserId));
+        .map((member) => member.athlete_id)
+        .filter((athleteId) => eligible.has(athleteId));
     }
     athleteIds = resolveRecipientIds(individualAthleteIds, groupAthleteIds, rosterAthleteIds);
     if (!athleteIds.length) return error("The selection contains no current team athletes.");

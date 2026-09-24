@@ -39,11 +39,11 @@ async function requireCoachAccess(teamId: string) {
 export async function addAthleteToGroup(formData: FormData) {
   const teamId = String(formData.get("teamId") ?? "");
   const groupId = String(formData.get("groupId") ?? "");
-  const athleteUserId = String(
-    formData.get("athleteUserId") ?? ""
+  const athleteId = String(
+    formData.get("athleteId") ?? ""
   );
 
-  if (!teamId || !groupId || !athleteUserId) {
+  if (!teamId || !groupId || !athleteId) {
     throw new Error("Missing required group membership information.");
   }
 
@@ -51,15 +51,14 @@ export async function addAthleteToGroup(formData: FormData) {
 
   const { data: athleteMembership, error: athleteError } =
     await supabase
-      .from("team_memberships")
-      .select("id")
-      .eq("team_id", teamId)
-      .eq("user_id", athleteUserId)
-      .eq("role", "athlete")
+    .from("team_athlete_memberships")
+    .select("id")
+    .eq("team_id", teamId)
+    .eq("athlete_id", athleteId)
       .single();
 
   if (athleteError || !athleteMembership) {
-    throw new Error("This user is not an athlete on this team.");
+    throw new Error("This athlete is not on this team.");
   }
 
   const { data: group, error: groupError } = await supabase
@@ -77,7 +76,8 @@ export async function addAthleteToGroup(formData: FormData) {
     .from("team_group_memberships")
     .insert({
       team_group_id: groupId,
-      athlete_user_id: athleteUserId,
+      team_id: teamId,
+      athlete_id: athleteId,
       created_by_user_id: user.id,
     });
 
@@ -92,11 +92,11 @@ export async function addAthleteToGroup(formData: FormData) {
 export async function removeAthleteFromGroup(formData: FormData) {
   const teamId = String(formData.get("teamId") ?? "");
   const groupId = String(formData.get("groupId") ?? "");
-  const athleteUserId = String(
-    formData.get("athleteUserId") ?? ""
+  const athleteId = String(
+    formData.get("athleteId") ?? ""
   );
 
-  if (!teamId || !groupId || !athleteUserId) {
+  if (!teamId || !groupId || !athleteId) {
     throw new Error("Missing required group membership information.");
   }
 
@@ -117,7 +117,7 @@ export async function removeAthleteFromGroup(formData: FormData) {
     .from("team_group_memberships")
     .delete()
     .eq("team_group_id", groupId)
-    .eq("athlete_user_id", athleteUserId);
+    .eq("athlete_id", athleteId);
 
   if (error) {
     throw new Error(error.message);
