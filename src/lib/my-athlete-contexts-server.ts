@@ -47,6 +47,26 @@ function duplicateAthleteId(contexts: readonly FamilyAthleteContext[]) {
   return null;
 }
 
+function normalizeFamilyAthleteContexts(contexts: readonly FamilyAthleteContext[]) {
+  const contextsByAthleteId = new Map<string, FamilyAthleteContext[]>();
+  for (const context of contexts) {
+    const sameAthlete = contextsByAthleteId.get(context.athleteId) ?? [];
+    sameAthlete.push(context);
+    contextsByAthleteId.set(context.athleteId, sameAthlete);
+  }
+
+  const selectedContexts: FamilyAthleteContext[] = [];
+  for (const [athleteId, sameAthlete] of contextsByAthleteId) {
+    const selves = sameAthlete.filter((context) => context.relationshipRole === "self");
+    const guardians = sameAthlete.filter((context) => context.relationshipRole === "guardian");
+    if (selves.length > 1 || guardians.length > 1) {
+      throw new Error(`Family athlete context data is ambiguous for athlete ${athleteId}.`);
+    }
+    selectedContexts.push(selves[0] ?? guardians[0]);
+  }
+  return selectedContexts.sort(compareContexts);
+}
+
 /**
  * Resolves only an already-authorized family context. With no explicit request,
  * the sole self context wins; otherwise contexts sort self-before-guardian,
@@ -91,7 +111,7 @@ export async function loadMyFamilyAthleteContexts(): Promise<FamilyAthleteContex
     .is("revoked_at", null);
   if (error) throw new Error("Unable to load family athlete contexts.");
 
-  return ((data ?? []) as RelationshipRow[])
+  const contexts = ((data ?? []) as RelationshipRow[])
     .flatMap((relationship) => {
       const athlete = one(relationship.athletes);
       return athlete ? [{
@@ -102,6 +122,7 @@ export async function loadMyFamilyAthleteContexts(): Promise<FamilyAthleteContex
       canManage: relationship.manage_permission,
       canAct: relationship.training_permission,
       }] : [];
-    })
-    .sort(compareContexts);
+    });
+
+  return normalizeFamilyAthleteContexts(contexts);
 }

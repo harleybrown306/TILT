@@ -31,6 +31,41 @@ const context = (athleteId, relationshipRole = "guardian", capabilities = {}) =>
   canAct: capabilities.canAct ?? false,
 });
 
+function relationship(athleteId, role, { canManage = false, canAct = false, revokedAt = null } = {}) {
+  return {
+    profile_id: "claimed-profile",
+    athlete_id: athleteId,
+    role,
+    revoked_at: revokedAt,
+    manage_permission: canManage,
+    training_permission: canAct,
+    athletes: { id: athleteId, display_name: athleteId, graduation_year: null },
+  };
+}
+
+async function loadContexts(rows) {
+  const filters = {};
+  const query = {
+    select() { return this; },
+    eq(field, value) { filters[field] = value; return this; },
+    in(field, value) { filters[field] = value; return this; },
+    is(field, value) {
+      filters[field] = value;
+      return Promise.resolve({
+        data: rows.filter((row) => row.profile_id === filters.profile_id
+          && filters.role.includes(row.role)
+          && row.revoked_at === filters.revoked_at),
+        error: null,
+      });
+    },
+  };
+  const { loadMyFamilyAthleteContexts } = loadModule(async () => ({
+    auth: { getUser: async () => ({ data: { user: { id: "claimed-profile" } }, error: null }) },
+    from: () => query,
+  }));
+  return loadMyFamilyAthleteContexts();
+}
+
 test("one self athlete is selected by default", () => {
   const self = context("self", "self", { canManage: true, canAct: true });
   assert.deepEqual(resolveActiveAthleteContext([self]), { status: "selected", context: self });
@@ -90,6 +125,72 @@ test("duplicate durable identities fail closed without merging capabilities", ()
   const expected = { status: "ambiguous_context", athleteId: "same" };
   assert.deepEqual(resolveActiveAthleteContext([self, guardian]), expected);
   assert.deepEqual(resolveActiveAthleteContext([self, guardian], "same"), expected);
+});
+
+test("loader keeps one SELF or GUARDIAN context for one durable athlete", async () => {
+  assert.deepEqual(await loadContexts([relationship("athlete-a", "self", { canManage: true, canAct: true })]), [
+    context("athlete-a", "self", { canManage: true, canAct: true }),
+  ]);
+  assert.deepEqual(await loadContexts([relationship("athlete-a", "guardian", { canManage: true })]), [
+    context("athlete-a", "guardian", { canManage: true }),
+  ]);
+});
+
+test("loader selects SELF wholesale over GUARDIAN for the same durable athlete", async () => {
+  const contexts = await loadContexts([
+    relationship("durable-athlete-a", "guardian", { canManage: true, canAct: true }),
+    relationship("durable-athlete-a", "self", { canManage: false, canAct: false }),
+  ]);
+  assert.deepEqual(contexts, [context("durable-athlete-a", "self", { canManage: false, canAct: false })]);
+  assert.notEqual(contexts[0].athleteId, "claimed-profile");
+});
+
+test("loader fails closed for duplicate SELF contexts regardless of row order", async () => {
+  const first = relationship("athlete-a", "self", { canManage: false, canAct: false });
+  const second = relationship("athlete-a", "self", { canManage: true, canAct: true });
+  await assert.rejects(loadContexts([first, second]), /context data is ambiguous for athlete athlete-a/);
+  await assert.rejects(loadContexts([second, first]), /context data is ambiguous for athlete athlete-a/);
+});
+
+test("loader fails closed for duplicate GUARDIAN contexts regardless of row order", async () => {
+  const first = relationship("athlete-a", "guardian", { canManage: false, canAct: false });
+  const second = relationship("athlete-a", "guardian", { canManage: true, canAct: true });
+  await assert.rejects(loadContexts([first, second]), /context data is ambiguous for athlete athlete-a/);
+  await assert.rejects(loadContexts([second, first]), /context data is ambiguous for athlete athlete-a/);
+});
+
+test("loader does not let valid cross-role precedence hide same-role corruption", async () => {
+  await assert.rejects(loadContexts([
+    relationship("athlete-a", "self", { canManage: false }),
+    relationship("athlete-a", "self", { canManage: true }),
+    relationship("athlete-a", "guardian", { canManage: true }),
+  ]), /context data is ambiguous for athlete athlete-a/);
+  await assert.rejects(loadContexts([
+    relationship("athlete-a", "self", { canManage: false }),
+    relationship("athlete-a", "guardian", { canManage: false }),
+    relationship("athlete-a", "guardian", { canManage: true }),
+  ]), /context data is ambiguous for athlete athlete-a/);
+});
+
+test("loader preserves distinct durable athletes while applying SELF precedence per athlete", async () => {
+  assert.deepEqual(await loadContexts([
+    relationship("athlete-a", "self", { canManage: true }),
+    relationship("athlete-b", "guardian", { canAct: true }),
+  ]), [
+    context("athlete-a", "self", { canManage: true }),
+    context("athlete-b", "guardian", { canAct: true }),
+  ]);
+});
+
+test("loader ignores revoked relationships before applying precedence", async () => {
+  assert.deepEqual(await loadContexts([
+    relationship("athlete-a", "self", { revokedAt: "2026-09-24T00:00:00Z" }),
+    relationship("athlete-a", "guardian", { canManage: true }),
+  ]), [context("athlete-a", "guardian", { canManage: true })]);
+  assert.deepEqual(await loadContexts([
+    relationship("athlete-a", "self", { canAct: true }),
+    relationship("athlete-a", "guardian", { canManage: true, revokedAt: "2026-09-24T00:00:00Z" }),
+  ]), [context("athlete-a", "self", { canAct: true })]);
 });
 
 test("no contexts returns no selection", () => {
