@@ -95,24 +95,9 @@ export default async function AthleteDetailPage({
     redirect("/login");
   }
 
-  const { data: coachMembership } = await supabase
-    .from("team_memberships")
-    .select("role")
-    .eq("team_id", teamId)
-    .eq("user_id", user.id)
-    .single();
-
-  if (
-    !coachMembership ||
-    !["coach", "assistant_coach"].includes(coachMembership.role)
-  ) {
-    redirect("/");
-  }
-
   const [
     { data: team, error: teamError },
     { data: rawAthletes, error: athleteError },
-    { data: sessions, error: sessionError },
   ] = await Promise.all([
     supabase
       .from("teams")
@@ -121,45 +106,6 @@ export default async function AthleteDetailPage({
       .single(),
 
     supabase.rpc("list_my_team_rostered_athlete_identities", { p_team_id: teamId }),
-
-    supabase
-      .from("training_sessions")
-      .select(`
-        id,
-        athlete_id,
-        athlete_user_id,
-        scheduled_date,
-        status,
-        workouts (
-          id,
-          name
-        ),
-        workout_results (
-          id,
-          training_session_id,
-          athlete_id,
-          athlete_user_id
-        ),
-        workout_session_attempts (
-          workout_result_id,
-          training_session_id,
-          athlete_id,
-          athlete_user_id,
-          finalization_state,
-          measurement_version,
-          measurement_quality,
-          prescribed_step_count,
-          completed_work_blocks,
-          skipped_work_blocks
-        ),
-        training_session_prescriptions (
-          schema_version,
-          step_count
-        )
-      `)
-      .eq("team_id", teamId)
-      .eq("athlete_id", athleteId)
-      .order("scheduled_date", { ascending: false }),
   ]);
 
   if (teamError || !team) {
@@ -173,6 +119,48 @@ export default async function AthleteDetailPage({
   if (athleteError || !athlete) {
     notFound();
   }
+
+  // The roster projection authorizes through the canonical team-analytics
+  // VIEW boundary and proves durable team containment before session reads.
+  // It grants no management or training-action capability.
+  const { data: sessions, error: sessionError } = await supabase
+    .from("training_sessions")
+    .select(`
+      id,
+      athlete_id,
+      athlete_user_id,
+      scheduled_date,
+      status,
+      workouts (
+        id,
+        name
+      ),
+      workout_results (
+        id,
+        training_session_id,
+        athlete_id,
+        athlete_user_id
+      ),
+      workout_session_attempts (
+        workout_result_id,
+        training_session_id,
+        athlete_id,
+        athlete_user_id,
+        finalization_state,
+        measurement_version,
+        measurement_quality,
+        prescribed_step_count,
+        completed_work_blocks,
+        skipped_work_blocks
+      ),
+      training_session_prescriptions (
+        schema_version,
+        step_count
+      )
+    `)
+    .eq("team_id", teamId)
+    .eq("athlete_id", athleteId)
+    .order("scheduled_date", { ascending: false });
 
   if (sessionError) {
     console.error(
