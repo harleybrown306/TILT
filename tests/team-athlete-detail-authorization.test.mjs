@@ -27,13 +27,13 @@ function loadPage(mocks) {
   return loaded.exports.default;
 }
 
-function fixture({ roster = "coach-allowed" } = {}) {
+function fixture({ roster = "canonical-roster-success" } = {}) {
   const calls = [];
   const client = {
     auth: { getUser: async () => ({ data: { user: { id: profileId } } }) },
     rpc(name, payload) {
       calls.push({ kind: "rpc", name, payload });
-      if (roster.endsWith("-denied")) return Promise.resolve({ data: null, error: { message: `${roster} denied` } });
+      if (roster !== "canonical-roster-success" && roster !== "canonical-roster-success-repeat" && roster !== "other-team") return Promise.resolve({ data: null, error: { message: `${roster} denied` } });
       if (roster === "other-team") return Promise.resolve({ data: [], error: null });
       return Promise.resolve({ data: [{ athlete_id: athleteId, display_name: "Durable athlete" }], error: null });
     },
@@ -75,8 +75,8 @@ async function open(fixture) {
   return fixture.page({ params: Promise.resolve({ teamId, athleteId }) });
 }
 
-for (const [viewer, roster] of [["coach", "coach-allowed"], ["assistant coach", "assistant-allowed"], ["platform admin", "admin-allowed"]]) {
-  test(`${viewer} can view a durably rostered team athlete through the analytics roster boundary`, async () => {
+for (const roster of ["canonical-roster-success", "canonical-roster-success-repeat"]) {
+  test(`route consumes a successful canonical roster response before reading athlete sessions (${roster})`, async () => {
     const current = fixture({ roster });
     await open(current);
     assert.deepEqual(current.calls.find((call) => call.kind === "rpc"), {
@@ -89,8 +89,8 @@ for (const [viewer, roster] of [["coach", "coach-allowed"], ["assistant coach", 
   });
 }
 
-for (const [viewer, roster] of [["unrelated coach", "unrelated-denied"], ["guardian-only account", "guardian-denied"], ["self-only athlete", "self-denied"]]) {
-  test(`${viewer} is denied before the detail route reads sessions`, async () => {
+for (const roster of ["canonical-roster-denied", "canonical-roster-error"]) {
+  test(`route consumes canonical roster denial before reading athlete sessions (${roster})`, async () => {
     const current = fixture({ roster });
     await assert.rejects(open(current), /NOT_FOUND/);
     assert.equal(current.calls.some((call) => call.table === "training_sessions"), false);

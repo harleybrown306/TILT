@@ -197,11 +197,8 @@ export async function loadTeamAttentionAttendance(teamId: string) {
   if (error || !rawRows || teamError || !team) throw new Error("Unable to load team attention analytics.");
 
   const rows = rawRows as AttentionRow[];
-  let asOfDate = rows[0]?.as_of_date;
-  if (rows.length && rows.some((row) => row.as_of_date !== asOfDate)) {
-    throw new Error("Team attention analytics returned an invalid snapshot.");
-  }
-  if (!asOfDate) {
+  let asOfDate: string;
+  if (rows.length === 0) {
     const { data: anchor, error: anchorError } = await supabase.rpc(
       "get_team_attention_as_of_date",
       { p_team_id: teamId },
@@ -210,6 +207,13 @@ export async function loadTeamAttentionAttendance(teamId: string) {
       throw new Error("Unable to load team attention calendar anchor.");
     }
     asOfDate = anchor;
+  } else {
+    const candidate = rows[0].as_of_date;
+    if (typeof candidate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(candidate)
+      || rows.some((row) => row.as_of_date !== candidate)) {
+      throw new Error("Team attention analytics returned an invalid snapshot.");
+    }
+    asOfDate = candidate;
   }
 
   const { data: roster, error: rosterError } = await supabase.rpc(

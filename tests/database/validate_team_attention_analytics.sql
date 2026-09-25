@@ -107,6 +107,8 @@ BEGIN
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 unrelated analytics actor was not denied'; END IF;
   v_denied:=false; BEGIN PERFORM public.get_team_attention_as_of_date(v_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 unrelated actor read anchor'; END IF;
+  v_denied:=false; BEGIN PERFORM public.get_team_attention_as_of_date(v_other_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '14B2 guessed unauthorized team anchor was not denied'; END IF;
   PERFORM set_config('request.jwt.claim.sub',v_guardian::text,true);
   v_denied:=false; BEGIN PERFORM count(*) FROM public.list_my_team_attention_sessions(v_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 guardian-only analytics actor was not denied'; END IF;
@@ -115,6 +117,8 @@ BEGIN
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 self-only analytics actor was not denied'; END IF;
   v_denied:=false; BEGIN PERFORM count(*) FROM public.list_my_team_attention_sessions(NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 null team was not denied'; END IF;
+  v_denied:=false; BEGIN PERFORM public.get_team_attention_as_of_date(NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '14B2 null team anchor was not denied'; END IF;
   EXECUTE 'RESET ROLE';
   RAISE NOTICE '14B2 VALIDATOR PASS';
 END;
