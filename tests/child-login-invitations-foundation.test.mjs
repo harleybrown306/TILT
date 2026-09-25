@@ -6,14 +6,17 @@ const migrationName = "20260923201138_create_child_login_invitation_foundation.s
 const sql = readFileSync(new URL(`../supabase/migrations/${migrationName}`, import.meta.url), "utf8");
 const managerAuthorizationMigrationName = "20260924182152_child_login_invitation_manager_authorization.sql";
 const managerAuthorizationSql = readFileSync(new URL(`../supabase/migrations/${managerAuthorizationMigrationName}`, import.meta.url), "utf8");
+const recipientAuthorizationMigrationName = "20260924182153_reconcile_child_login_recipient_claim_authorization.sql";
+const recipientAuthorizationSql = readFileSync(new URL(`../supabase/migrations/${recipientAuthorizationMigrationName}`, import.meta.url), "utf8");
 const validator = readFileSync(new URL("database/validate_child_login_invitation_foundation.sql", import.meta.url), "utf8");
 
 test("child-login claim foundation and C1 manager authorization are canonical forward migrations", () => {
   const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url))
-    .filter((name) => /child_login_invitation/.test(name));
-  assert.deepEqual(migrations, [migrationName, managerAuthorizationMigrationName]);
+    .filter((name) => /child_login/.test(name));
+  assert.deepEqual(migrations, [migrationName, managerAuthorizationMigrationName, recipientAuthorizationMigrationName]);
   assert.match(sql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
   assert.match(managerAuthorizationSql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
+  assert.match(recipientAuthorizationSql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
 });
 
 test("claim invitations are hash-only, immutable, exactly seven days, and one pending per athlete", () => {
@@ -146,6 +149,46 @@ test("C1 releases only manager RPCs with canonical MANAGE and preserves create a
   assert.match(managerAuthorizationSql, /REVOKE ALL ON TABLE public\.child_login_invitations FROM PUBLIC,anon,authenticated;/);
 });
 
+test("D1 binds recipient acceptance to the original inviter's explicit canonical MANAGE and releases only recipient RPCs", () => {
+  const helper = recipientAuthorizationSql.slice(
+    recipientAuthorizationSql.indexOf("CREATE FUNCTION private.can_manage_athlete_identity_for_profile"),
+    recipientAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.accept_child_login_invitation"),
+  );
+  const accept = recipientAuthorizationSql.slice(
+    recipientAuthorizationSql.indexOf("CREATE OR REPLACE FUNCTION public.accept_child_login_invitation"),
+    recipientAuthorizationSql.indexOf("REVOKE ALL ON FUNCTION public.get_child_login_invitation_summary"),
+  );
+
+  assert.match(helper, /RETURNS boolean[\s\S]*SECURITY DEFINER[\s\S]*SET search_path TO ''/);
+  assert.match(helper, /relationship\.profile_id = p_profile_id[\s\S]*relationship\.role = 'self'[\s\S]*relationship\.revoked_at IS NULL/);
+  assert.match(helper, /relationship\.profile_id = p_profile_id[\s\S]*relationship\.role = 'guardian'[\s\S]*relationship\.revoked_at IS NULL/);
+  assert.match(helper, /SELECT coalesce\([\s\S]*self[\s\S]*guardian[\s\S]*false/);
+  assert.match(recipientAuthorizationSql, /REVOKE ALL ON FUNCTION private\.can_manage_athlete_identity_for_profile\(uuid,uuid\) FROM PUBLIC, anon, authenticated;/);
+  assert.doesNotMatch(recipientAuthorizationSql, /GRANT EXECUTE ON FUNCTION private\.can_manage_athlete_identity_for_profile/);
+
+  assert.match(accept, /private\.child_login_claim_lock\(v_candidate,v_actor\)[\s\S]*FOR UPDATE[\s\S]*v_i\.status = 'accepted'/);
+  assert.match(accept, /r\.profile_id = v_i\.inviter_profile_id[\s\S]*r\.role IN \('self','guardian'\)[\s\S]*FOR UPDATE[\s\S]*private\.can_manage_athlete_identity_for_profile\(v_i\.athlete_id,v_i\.inviter_profile_id\)/);
+  assert.doesNotMatch(accept, /private\.can_manage_athlete_identity\(v_i\.athlete_id\)/);
+  assert.ok(
+    accept.indexOf("private.can_manage_athlete_identity_for_profile(v_i.athlete_id,v_i.inviter_profile_id)")
+      < accept.indexOf("WHERE r.athlete_id = v_i.athlete_id AND r.role = 'self'"),
+    "accept must evaluate original-inviter canonical MANAGE before target SELF-history enforcement",
+  );
+  assert.match(accept, /WHERE r\.athlete_id = v_i\.athlete_id AND r\.role = 'self'[\s\S]*FOR UPDATE/);
+  assert.match(accept, /WHERE r\.profile_id = v_actor AND r\.role = 'self' AND r\.revoked_at IS NULL[\s\S]*FOR UPDATE/);
+  assert.match(accept, /INSERT INTO public\.athlete_profile_relationships[\s\S]*'self',true,true,v_i\.inviter_profile_id/);
+  assert.doesNotMatch(accept, /INSERT INTO public\.athletes/);
+
+  for (const signature of [
+    "get_child_login_invitation_summary(text)",
+    "accept_child_login_invitation(text)",
+  ]) {
+    assert.match(recipientAuthorizationSql, new RegExp(`REVOKE ALL ON FUNCTION public\\.${signature.replace(/[()]/g, "\\$&")} FROM PUBLIC, anon, authenticated;`));
+    assert.match(recipientAuthorizationSql, new RegExp(`GRANT EXECUTE ON FUNCTION public\\.${signature.replace(/[()]/g, "\\$&")} TO authenticated;`));
+  }
+  assert.doesNotMatch(recipientAuthorizationSql, /GRANT EXECUTE ON FUNCTION public\.(?:get_child_login_invitation_summary|accept_child_login_invitation).*?(?:anon|PUBLIC)/);
+});
+
 test("rollback validator checks security posture and claim invariants without persisting fixtures", () => {
   assert.match(validator, /(?:^|\n)BEGIN;[\s\S]*ROLLBACK;\s*$/);
   assert.match(validator, /#variable_conflict error/);
@@ -155,6 +198,14 @@ test("rollback validator checks security posture and claim invariants without pe
     "child login invitation function hardening or phase grants are incorrect",
     "C1-03 SELF=false suppresses guardian=true failed",
     "C1-11 former inviter retained authority",
+    "D1 original inviter canonical MANAGE failed",
+    "D1 case 1 active SELF manager claim conflict failed",
+    "D1 case 2 SELF=false guardian=true denial failed",
+    "D1 case 3 revoked SELF target history claim conflict failed",
+    "D1 case 4 former inviter authority loss failed",
+    "D1 case 5 revoked recipient SELF different athlete failed",
+    "D1 recipient active SELF conflict failed",
+    "D1 recipient revoked SELF fallback failed",
     "SECTION C1 PASS",
     "one pending child login invitation per athlete was not enforced",
     "wrong recipient learned child identity",
