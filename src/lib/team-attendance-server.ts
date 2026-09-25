@@ -197,9 +197,19 @@ export async function loadTeamAttentionAttendance(teamId: string) {
   if (error || !rawRows || teamError || !team) throw new Error("Unable to load team attention analytics.");
 
   const rows = rawRows as AttentionRow[];
-  const asOfDate = rows[0]?.as_of_date;
-  if (!asOfDate || rows.some((row) => row.as_of_date !== asOfDate)) {
+  let asOfDate = rows[0]?.as_of_date;
+  if (rows.length && rows.some((row) => row.as_of_date !== asOfDate)) {
     throw new Error("Team attention analytics returned an invalid snapshot.");
+  }
+  if (!asOfDate) {
+    const { data: anchor, error: anchorError } = await supabase.rpc(
+      "get_team_attention_as_of_date",
+      { p_team_id: teamId },
+    );
+    if (anchorError || typeof anchor !== "string") {
+      throw new Error("Unable to load team attention calendar anchor.");
+    }
+    asOfDate = anchor;
   }
 
   const { data: roster, error: rosterError } = await supabase.rpc(

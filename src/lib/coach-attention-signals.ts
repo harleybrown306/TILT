@@ -60,7 +60,7 @@ function pastOrTodaySessions(sessions: readonly AttendanceSession[], today: stri
 function completed(session: AttendanceSession) {
   // `completedAt` is loaded from workout_results, the canonical completion
   // record. A session status or an attempt alone never establishes completion.
-  return Boolean(session.hasCanonicalCompletion ?? session.completedAt);
+  return session.storedStatus !== "cancelled" && Boolean(session.hasCanonicalCompletion ?? session.completedAt);
 }
 
 function signal(

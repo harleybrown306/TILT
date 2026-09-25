@@ -18,6 +18,10 @@ test("missing prescription keeps completion but omits minutes and zero expected 
   assert.equal(analytics.teamAnalytics([{ ...session("a", "one", "2026-09-13"), prescribedWorkMs: null }], today, 7).completedWorkouts, 1);
   assert.equal(analytics.teamAnalytics([{ ...session("a", "one", today, "scheduled") }], today, 7).attendance, null);
 });
+test("cancelled canonical completion is excluded from operational completed and prescribed totals", () => {
+  const cancelled = { ...session("cancelled", "one", "2026-09-13", "cancelled", 120_000), hasCanonicalCompletion: true, completedAt: "2026-09-13T18:00:00Z" };
+  assert.deepEqual(analytics.teamAnalytics([cancelled, session("active", "two", "2026-09-13", "completed", 60_000)], today, 7), { completedWorkouts: 1, prescribedWorkMs: 60_000, trainingDays: 1, expected: 1, completedExpected: 1, missed: 0, attendance: 100, activeAthletes: 1 });
+});
 test("windows and daily trend stay team-session scoped and include empty dates", () => {
   const trend = analytics.teamTrend([session("a", "one", "2026-08-16", "completed", 60_000)], today, 30);
   assert.equal(trend.length, 30); assert.equal(trend[0].prescribedWorkMs, 60_000); assert.equal(trend.at(-1).prescribedWorkMs, 0);

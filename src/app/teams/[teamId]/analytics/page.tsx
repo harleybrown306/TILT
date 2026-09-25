@@ -25,7 +25,7 @@ export default async function TeamAnalyticsPage({ params, searchParams }: Props)
   };
   const adherenceFor = (rows: typeof sessions) => aggregateExerciseAdherence(
     rows
-      .filter((session) => completedInWindow(session, today, days))
+      .filter((session) => session.storedStatus !== "cancelled" && completedInWindow(session, today, days))
       .map((session) => session.exerciseAdherenceInput ?? unavailableAdherenceInput)
   );
   const teamExerciseAdherence = adherenceFor(sessions);

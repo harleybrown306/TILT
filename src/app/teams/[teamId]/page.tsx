@@ -10,7 +10,7 @@ export default async function TeamDashboardPage({ params }: PageProps) {
   const today = asOfDate;
   const signals = deriveCoachAttentionSignals({ sessions, today });
   const currentAthleteIds = new Set(athletes.map((athlete) => athlete.id));
-  const completedSessions = sessions.filter((session) => session.hasCanonicalCompletion);
+  const completedSessions = sessions.filter((session) => session.storedStatus !== "cancelled" && session.hasCanonicalCompletion);
   const scheduledSessions = sessions.filter((session) => session.storedStatus !== "cancelled" && !session.hasCanonicalCompletion);
 
   return <main className="min-h-screen bg-slate-950 px-6 py-10 text-white"><div className="mx-auto max-w-6xl">

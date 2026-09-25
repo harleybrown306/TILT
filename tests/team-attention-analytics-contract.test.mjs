@@ -18,9 +18,28 @@ test("bounded attention RPC has the exact derived projection and privileged boun
 test("bounded loader uses the RPC as-of date and never reads raw ACT-only attempts", () => {
   assert.match(loader, /loadTeamAttentionAttendance/);
   assert.match(loader, /list_my_team_attention_sessions/);
-  assert.match(loader, /const asOfDate = rows\[0\]\?\.as_of_date/);
+  assert.match(loader, /let asOfDate = rows\[0\]\?\.as_of_date/);
   const bounded = loader.slice(loader.indexOf("export async function loadTeamAttentionAttendance"));
   assert.doesNotMatch(bounded, /workout_session_attempts\(/);
   assert.doesNotMatch(bounded, /athlete_user_id/);
   assert.match(bounded, /athlete_id \?\? ""/);
+});
+
+test("empty bounded snapshots use an authorized database anchor rather than a fake row or server clock", () => {
+  const anchor = readFileSync(new URL("../supabase/migrations/20260925214831_add_team_attention_as_of_date.sql", import.meta.url), "utf8");
+  assert.match(anchor, /CREATE FUNCTION public\.get_team_attention_as_of_date\(\s*p_team_id uuid/);
+  assert.match(anchor, /private\.can_view_team_analytics\(p_team_id\)/);
+  assert.match(anchor, /transaction_timestamp\(\) AT TIME ZONE 'America\/Chicago'/);
+  assert.match(anchor, /REVOKE ALL[\s\S]*FROM PUBLIC[\s\S]*REVOKE ALL[\s\S]*FROM anon[\s\S]*GRANT EXECUTE[\s\S]*TO authenticated/);
+  assert.match(loader, /if \(!asOfDate\)[\s\S]*get_team_attention_as_of_date/);
+  assert.doesNotMatch(loader.slice(loader.indexOf("export async function loadTeamAttentionAttendance")), /localDate\(new Date|new Date\(/);
+});
+
+test("operational analytics exclude cancelled facts without falsifying canonical completion", () => {
+  const home = readFileSync(new URL("../src/app/teams/[teamId]/page.tsx", import.meta.url), "utf8");
+  const attention = readFileSync(new URL("../src/lib/coach-attention-signals.ts", import.meta.url), "utf8");
+  const analytics = readFileSync(new URL("../src/app/teams/[teamId]/analytics/page.tsx", import.meta.url), "utf8");
+  assert.match(home, /storedStatus !== "cancelled" && session\.hasCanonicalCompletion/);
+  assert.match(attention, /session\.storedStatus !== "cancelled"/);
+  assert.match(analytics, /session\.storedStatus !== "cancelled" && completedInWindow/);
 });
