@@ -48,6 +48,18 @@ type Session = {
   workout_session_attempts: Related<Attempt>;
 };
 
+type AttentionRow = {
+  as_of_date: string;
+  session_id: string;
+  athlete_id: string | null;
+  scheduled_date: string;
+  is_cancelled: boolean;
+  has_canonical_completion: boolean;
+  prescribed_work_ms: number | null;
+  adherence_completed_work_blocks: number | null;
+  adherence_prescribed_work_blocks: number | null;
+};
+
 function one<T>(value: Related<T>): T | null {
   return Array.isArray(value) ? value[0] ?? null : value;
 }
@@ -167,4 +179,56 @@ export async function loadTeamAttendance(teamId: string) {
     sessions: normalized,
     athletes: [...names].map(([id, name]) => ({ id, name })),
   };
+}
+
+/**
+ * The bounded coach-facing analytics projection. Unlike the historic schedule
+ * loader above, this path never reads raw results or ACT-only attempts.
+ */
+export async function loadTeamAttentionAttendance(teamId: string) {
+  const supabase = await createClient();
+  const [{ data: rawRows, error }, { data: team, error: teamError }] = await Promise.all([
+    supabase.rpc(
+    "list_my_team_attention_sessions",
+    { p_team_id: teamId },
+    ),
+    supabase.from("teams").select("id,name").eq("id", teamId).single(),
+  ]);
+  if (error || !rawRows || teamError || !team) throw new Error("Unable to load team attention analytics.");
+
+  const rows = rawRows as AttentionRow[];
+  const asOfDate = rows[0]?.as_of_date;
+  if (!asOfDate || rows.some((row) => row.as_of_date !== asOfDate)) {
+    throw new Error("Team attention analytics returned an invalid snapshot.");
+  }
+
+  const { data: roster, error: rosterError } = await supabase.rpc(
+    "list_my_team_rostered_athlete_identities",
+    { p_team_id: teamId },
+  );
+  if (rosterError) throw new Error("Unable to load current team roster.");
+  const athletes = (roster ?? []) as RosteredAthlete[];
+  const names = new Map(athletes.map((athlete) => [athlete.athlete_id, athlete.display_name || "Unnamed athlete"]));
+
+  const sessions: AttendanceSession[] = rows.map((row) => {
+    const athleteId = row.athlete_id ?? "";
+    const adherenceAvailable = row.adherence_completed_work_blocks !== null && row.adherence_prescribed_work_blocks !== null;
+    return {
+      id: row.session_id,
+      athleteId,
+      athleteName: athleteId ? names.get(athleteId) ?? "Unnamed athlete" : "Former athlete",
+      scheduledDate: row.scheduled_date,
+      storedStatus: row.is_cancelled ? "cancelled" : "scheduled",
+      workoutName: "Assigned workout",
+      completedAt: null,
+      hasCanonicalCompletion: row.has_canonical_completion,
+      prescribedWorkMs: row.prescribed_work_ms,
+      exerciseAdherenceInput: adherenceAvailable ? {
+        result: { id: row.session_id, trainingSessionId: row.session_id, athleteId },
+        attempt: { workoutResultId: row.session_id, trainingSessionId: row.session_id, athleteId, finalizationState: "finalized_completed", measurementVersion: 1, measurementQuality: "complete", prescribedStepCount: row.adherence_prescribed_work_blocks!, completedWorkBlocks: row.adherence_completed_work_blocks!, skippedWorkBlocks: row.adherence_prescribed_work_blocks! - row.adherence_completed_work_blocks! },
+        prescription: { sessionId: row.session_id, schemaVersion: 1, stepCount: row.adherence_prescribed_work_blocks! },
+      } : undefined,
+    };
+  });
+  return { team, asOfDate, sessions, athletes: athletes.map((athlete) => ({ id: athlete.athlete_id, name: athlete.display_name || "Unnamed athlete" })) };
 }

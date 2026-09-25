@@ -27,13 +27,13 @@ function loadPage(mocks) {
   return loaded.exports.default;
 }
 
-function fixture({ roster = "allowed" } = {}) {
+function fixture({ roster = "coach-allowed" } = {}) {
   const calls = [];
   const client = {
     auth: { getUser: async () => ({ data: { user: { id: profileId } } }) },
     rpc(name, payload) {
       calls.push({ kind: "rpc", name, payload });
-      if (roster === "denied") return Promise.resolve({ data: null, error: { message: "denied" } });
+      if (roster.endsWith("-denied")) return Promise.resolve({ data: null, error: { message: `${roster} denied` } });
       if (roster === "other-team") return Promise.resolve({ data: [], error: null });
       return Promise.resolve({ data: [{ athlete_id: athleteId, display_name: "Durable athlete" }], error: null });
     },
@@ -75,9 +75,9 @@ async function open(fixture) {
   return fixture.page({ params: Promise.resolve({ teamId, athleteId }) });
 }
 
-for (const viewer of ["coach", "assistant coach", "platform admin"]) {
+for (const [viewer, roster] of [["coach", "coach-allowed"], ["assistant coach", "assistant-allowed"], ["platform admin", "admin-allowed"]]) {
   test(`${viewer} can view a durably rostered team athlete through the analytics roster boundary`, async () => {
-    const current = fixture();
+    const current = fixture({ roster });
     await open(current);
     assert.deepEqual(current.calls.find((call) => call.kind === "rpc"), {
       kind: "rpc",
@@ -89,9 +89,9 @@ for (const viewer of ["coach", "assistant coach", "platform admin"]) {
   });
 }
 
-for (const viewer of ["unrelated coach", "guardian-only account", "self-only athlete"]) {
+for (const [viewer, roster] of [["unrelated coach", "unrelated-denied"], ["guardian-only account", "guardian-denied"], ["self-only athlete", "self-denied"]]) {
   test(`${viewer} is denied before the detail route reads sessions`, async () => {
-    const current = fixture({ roster: "denied" });
+    const current = fixture({ roster });
     await assert.rejects(open(current), /NOT_FOUND/);
     assert.equal(current.calls.some((call) => call.table === "training_sessions"), false);
   });

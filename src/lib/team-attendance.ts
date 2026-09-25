@@ -17,6 +17,9 @@ export type AttendanceSession = {
   storedStatus: string;
   workoutName: string;
   completedAt: string | null;
+  // Bounded analytics deliberately receive only this factual completion bit,
+  // not a result timestamp or identifier.
+  hasCanonicalCompletion?: boolean;
   prescribedWorkMs: number | null;
   exerciseAdherenceInput?: ExerciseAdherenceInput;
 };
@@ -41,11 +44,11 @@ export function shiftDate(date: string, days: number) {
 }
 
 export function attendanceStatus(
-  session: Pick<AttendanceSession, "scheduledDate" | "storedStatus" | "completedAt">,
+  session: Pick<AttendanceSession, "scheduledDate" | "storedStatus" | "completedAt" | "hasCanonicalCompletion">,
   today: string
 ): AttendanceStatus {
   if (session.storedStatus === "cancelled") return "cancelled";
-  if (session.storedStatus === "completed" || session.completedAt) return "completed";
+  if (session.storedStatus === "completed" || session.completedAt || session.hasCanonicalCompletion) return "completed";
   if (session.scheduledDate > today) return "upcoming";
   if (session.scheduledDate === today) return "pending";
 

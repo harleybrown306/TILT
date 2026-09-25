@@ -4,12 +4,18 @@ import test from "node:test";
 
 const page = readFileSync(new URL("../src/app/teams/[teamId]/page.tsx", import.meta.url), "utf8");
 
-test("team home derives attention from the guarded family-first loader before summary and roster", () => {
-  assert.match(page, /loadTeamAttendance\(teamId\)/);
+test("team home derives attention from the bounded analytics loader before summary and roster", () => {
+  assert.match(page, /loadTeamAttentionAttendance\(teamId\)/);
+  assert.match(page, /const today = asOfDate/);
   assert.match(page, /deriveCoachAttentionSignals\(\{ sessions, today \}\)/);
   assert.ok(page.indexOf('id="attention-heading"') < page.indexOf('aria-label="Team summary"'));
   assert.ok(page.indexOf('id="attention-heading"') < page.indexOf("Roster"));
   assert.doesNotMatch(page, /team_memberships|athlete_user_id|createClient|service_role/);
+});
+
+test("team home presents bounded Last 30 days facts without raw attempt access", () => {
+  assert.match(page, /Last 30 days/);
+  assert.doesNotMatch(page, /workout_session_attempts|athlete_user_id|localDate\(new Date/);
 });
 
 test("attention presents only approved factual evidence with restrained empty state", () => {

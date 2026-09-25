@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { loadTeamAttendance } from "@/lib/team-attendance-server";
-import { attendanceSummary, localDate } from "@/lib/team-attendance";
+import { loadTeamAttentionAttendance } from "@/lib/team-attendance-server";
+import { attendanceSummary } from "@/lib/team-attendance";
 
 type Props = {
   params: Promise<{ teamId: string }>;
@@ -19,8 +19,8 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 export default async function Page({ params, searchParams }: Props) {
   const { teamId } = await params;
   const query = await searchParams;
-  const { team, sessions, athletes } = await loadTeamAttendance(teamId);
-  const today = localDate(new Date());
+  const { team, sessions, athletes, asOfDate } = await loadTeamAttentionAttendance(teamId);
+  const today = asOfDate;
   const days: 7 | 30 = query.window === "30" ? 30 : 7;
   const summary = attendanceSummary(sessions, today, days);
 

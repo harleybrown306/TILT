@@ -88,7 +88,10 @@ function setup(options = {}) {
       formatScheduledDate: (date) => date,
       attendanceStatus: (session, today) => session.completedAt || session.storedStatus === "completed" ? "completed" : session.scheduledDate > today ? "upcoming" : "pending",
     },
-    "@/lib/team-attendance-server": { loadTeamAttendance: async (teamId) => ({ team: tables.teams.find((team) => team.id === teamId), sessions: [], athletes: [] }) },
+    "@/lib/team-attendance-server": {
+      loadTeamAttendance: async (teamId) => ({ team: tables.teams.find((team) => team.id === teamId), sessions: [], athletes: [] }),
+      loadTeamAttentionAttendance: async (teamId) => ({ team: tables.teams.find((team) => team.id === teamId), asOfDate: "2026-09-14", sessions: [], athletes: [] }),
+    },
     "@/lib/coach-attention-signals": { deriveCoachAttentionSignals: () => [] },
     "@/lib/my-athlete-contexts-server": { loadMyFamilyAthleteContexts: async () => [], resolveActiveAthleteContext: () => ({ status: "none" }) },
     "@/lib/athlete-exercise-adherence": {

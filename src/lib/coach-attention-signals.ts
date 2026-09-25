@@ -60,7 +60,7 @@ function pastOrTodaySessions(sessions: readonly AttendanceSession[], today: stri
 function completed(session: AttendanceSession) {
   // `completedAt` is loaded from workout_results, the canonical completion
   // record. A session status or an attempt alone never establishes completion.
-  return Boolean(session.completedAt);
+  return Boolean(session.hasCanonicalCompletion ?? session.completedAt);
 }
 
 function signal(
@@ -86,7 +86,9 @@ function signal(
 
 export function deriveCoachAttentionSignals({ sessions, today }: CoachAttentionSignalInput) {
   const rows = pastOrTodaySessions(sessions, today);
-  const athleteIds = [...new Set(rows.map((session) => session.athleteId))].sort();
+  // A null identity is a retained former-athlete fact. It contributes to team
+  // totals but must never become an attention subject.
+  const athleteIds = [...new Set(rows.map((session) => session.athleteId).filter(Boolean))].sort();
   const recent = closedWindow(today);
   const previous = closedWindow(today, 1);
   const signals: CoachAttentionSignal[] = [];

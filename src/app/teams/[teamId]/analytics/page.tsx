@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { displayMinutes } from "@/lib/athlete-dashboard";
-import { localDate } from "@/lib/team-attendance";
-import { loadTeamAttendance } from "@/lib/team-attendance-server";
+import { loadTeamAttentionAttendance } from "@/lib/team-attendance-server";
 import { aggregateExerciseAdherence, type ExerciseAdherenceInput } from "@/lib/exercise-adherence";
 import { completedInWindow, teamAnalytics, teamTrend } from "@/lib/team-analytics";
 
@@ -14,8 +13,8 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 export default async function TeamAnalyticsPage({ params, searchParams }: Props) {
   const { teamId } = await params;
   const query = await searchParams;
-  const { team, sessions, athletes } = await loadTeamAttendance(teamId);
-  const today = localDate(new Date());
+  const { team, sessions, athletes, asOfDate } = await loadTeamAttentionAttendance(teamId);
+  const today = asOfDate;
   const days: 7 | 30 = query.window === "30" ? 30 : 7;
   const summary = teamAnalytics(sessions, today, days);
   const trend = teamTrend(sessions, today, days);
