@@ -28,7 +28,10 @@ function load(path, mocks = {}) {
   return loaded.exports;
 }
 
-const childLogin = load("src/lib/child-login-invitations.ts", { "@/lib/training-assignment": { isUuid: uuid } });
+const childLogin = load("src/lib/child-login-invitations.ts", {
+  "@/lib/auth-continuation": { authPath: (pathname, next) => `${pathname}?next=${encodeURIComponent(next)}` },
+  "@/lib/training-assignment": { isUuid: uuid },
+});
 const pageSource = readFileSync(root + "src/app/athletes/[athleteId]/child-login/page.tsx", "utf8");
 const actionsSource = readFileSync(root + "src/app/athletes/[athleteId]/child-login/actions.ts", "utf8");
 const dashboardSource = readFileSync(root + "src/app/page.tsx", "utf8");

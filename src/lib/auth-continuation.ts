@@ -1,4 +1,4 @@
-const invitationPattern = /^\/(invite|family-invite|guardian-invite)\/([A-Za-z0-9_-]{32,256})$/;
+const invitationPattern = /^\/(invite|family-invite|guardian-invite|child-login-invite)\/([A-Za-z0-9_-]{32,256})$/;
 
 /** Limits auth redirects to the small set of routes this lifecycle needs. */
 export function safeAuthContinuation(value: string | null | undefined) {

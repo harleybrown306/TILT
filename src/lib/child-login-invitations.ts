@@ -1,5 +1,7 @@
+import { authPath } from "@/lib/auth-continuation";
 import { isUuid } from "@/lib/training-assignment";
 
+const tokenPattern = /^[A-Za-z0-9_-]{32,256}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const invitationStatuses = ["pending", "accepted", "revoked", "expired"] as const;
 const timestamptzPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-](\d{2}):(\d{2}))$/;
@@ -12,6 +14,12 @@ export type ChildLoginInvitationListItem = {
   invitation_status: ChildLoginInvitationStatus;
   expires_at: string;
   created_at: string;
+};
+
+export type ChildLoginInvitationSummary = {
+  athlete_display_name: string;
+  expires_at: string;
+  invitation_status: ChildLoginInvitationStatus;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -90,8 +98,43 @@ export function parseChildLoginInvitationList(data: unknown): ChildLoginInvitati
   return rows.every((row): row is ChildLoginInvitationListItem => row !== null) ? rows : null;
 }
 
+export function parseChildLoginInvitationSummary(data: unknown):
+  | { kind: "none" }
+  | { kind: "malformed" }
+  | { kind: "summary"; value: ChildLoginInvitationSummary } {
+  if (!Array.isArray(data)) return { kind: "malformed" };
+  if (data.length === 0) return { kind: "none" };
+  if (data.length !== 1 || !isRecord(data[0])) return { kind: "malformed" };
+  const row = data[0];
+  return hasExactKeys(row, ["athlete_display_name", "expires_at", "invitation_status"])
+    && isNonemptyString(row.athlete_display_name) && isTimestamp(row.expires_at) && isStatus(row.invitation_status)
+    ? { kind: "summary", value: { athlete_display_name: row.athlete_display_name, expires_at: row.expires_at, invitation_status: row.invitation_status } }
+    : { kind: "malformed" };
+}
+
+export function parseChildLoginInvitationAcceptance(data: unknown): { athlete_id: string } | null {
+  if (!Array.isArray(data) || data.length !== 1 || !isRecord(data[0])) return null;
+  const row = data[0];
+  return hasExactKeys(row, ["athlete_id"]) && typeof row.athlete_id === "string" && isUuid(row.athlete_id)
+    ? { athlete_id: row.athlete_id }
+    : null;
+}
+
+export function isChildLoginInvitationToken(value: string) {
+  return tokenPattern.test(value);
+}
+
 export function childLoginInvitationPath(token: string) {
   return `/child-login-invite/${token}`;
+}
+
+export function childLoginInvitationLoginPath(token: string) {
+  return authPath("/login", childLoginInvitationPath(token));
+}
+
+export function childLoginInvitationStatus(summary: Pick<ChildLoginInvitationSummary, "invitation_status" | "expires_at">) {
+  if (summary.invitation_status === "pending" && Date.parse(summary.expires_at) <= Date.now()) return "expired";
+  return summary.invitation_status;
 }
 
 export function childLoginInvitationError() {
