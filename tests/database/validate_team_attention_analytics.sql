@@ -18,6 +18,7 @@ DECLARE
   v_workout uuid;
   v_exercise uuid;
   v_current_session uuid;
+  v_current_result uuid;
   v_former_session uuid;
   v_marker text := '14b2-' || replace(gen_random_uuid()::text, '-', '');
   v_as_of date := (transaction_timestamp() AT TIME ZONE 'America/Chicago')::date;
@@ -69,8 +70,33 @@ BEGIN
   VALUES (v_athlete,v_manager,v_team,v_workout,v_as_of - 1,'scheduled') RETURNING id INTO v_current_session;
   INSERT INTO public.training_sessions(athlete_id,coach_user_id,team_id,workout_id,scheduled_date,status)
   VALUES (v_former,v_manager,v_team,v_workout,v_as_of - 2,'cancelled') RETURNING id INTO v_former_session;
-  INSERT INTO public.workout_results(training_session_id,athlete_id) VALUES (v_current_session,v_athlete);
+  -- Use non-trivial Measurement V1 values. The generated snapshot is updated
+  -- through its real CHECK constraints, never by disabling them.
+  UPDATE public.training_session_prescriptions
+  SET step_count=5, steps='[{"n":1},{"n":2},{"n":3},{"n":4},{"n":5}]'::jsonb
+  WHERE session_id=v_current_session;
+  INSERT INTO public.workout_results(training_session_id,athlete_id) VALUES (v_current_session,v_athlete) RETURNING id INTO v_current_result;
   INSERT INTO public.workout_results(training_session_id,athlete_id) VALUES (v_former_session,v_former);
+  INSERT INTO public.workout_session_attempts(
+    id,training_session_id,athlete_id,workout_result_id,started_at,finalized_at,
+    finalization_state,prescription_schema_version,prescribed_work_ms,prescribed_rest_ms,
+    prescribed_total_ms,prescribed_step_count,completed_work_blocks,skipped_work_blocks,
+    measurement_version,measurement_quality
+  ) VALUES (
+    gen_random_uuid(),v_current_session,v_athlete,v_current_result,clock_timestamp(),clock_timestamp(),
+    'finalized_completed',1,300000,0,300000,5,3,2,1,'complete'
+  );
+  -- An extra session/athlete attempt that is not result-linked is legitimate
+  -- history and must not make the exact linked attempt ambiguous.
+  INSERT INTO public.workout_session_attempts(
+    id,training_session_id,athlete_id,workout_result_id,started_at,
+    finalization_state,prescription_schema_version,prescribed_work_ms,prescribed_rest_ms,
+    prescribed_total_ms,prescribed_step_count,completed_work_blocks,skipped_work_blocks,
+    measurement_version,measurement_quality
+  ) VALUES (
+    gen_random_uuid(),v_current_session,v_athlete,NULL,clock_timestamp(),
+    'open',1,300000,0,300000,5,0,0,1,'unknown'
+  );
   -- Result synchronization records the factual completion; cancellation is the
   -- later operational lifecycle state tested by this validator.
   UPDATE public.training_sessions SET status='cancelled' WHERE id=v_former_session;
@@ -85,7 +111,9 @@ BEGIN
      OR EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE as_of_date<>v_as_of)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session AND athlete_id=v_athlete AND has_canonical_completion)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_former_session AND athlete_id IS NULL AND is_cancelled AND has_canonical_completion)
-     OR EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session AND (adherence_completed_work_blocks IS NOT NULL OR adherence_prescribed_work_blocks IS NOT NULL)) THEN
+     OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session AND adherence_completed_work_blocks=3 AND adherence_prescribed_work_blocks=5)
+     OR EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE (adherence_completed_work_blocks IS NULL) <> (adherence_prescribed_work_blocks IS NULL))
+     OR (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session) <> 1 THEN
     RAISE EXCEPTION '14B2 bounded identity, completion, cancellation, or N/A projection failed';
   END IF;
   IF (SELECT count(*) FROM public.list_my_team_attention_sessions(v_empty_team)) <> 0
