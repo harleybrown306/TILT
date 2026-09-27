@@ -23,6 +23,9 @@ DECLARE
   v_marker text := '14b2-' || replace(gen_random_uuid()::text, '-', '');
   v_as_of date := (transaction_timestamp() AT TIME ZONE 'America/Chicago')::date;
   v_denied boolean := false;
+  v_case record;
+  v_case_session uuid;
+  v_case_result uuid;
 BEGIN
   IF to_regprocedure('public.list_my_team_attention_sessions(uuid)') IS NULL THEN
     RAISE EXCEPTION '14B2 attention RPC is missing';
@@ -101,13 +104,62 @@ BEGIN
   -- later operational lifecycle state tested by this validator.
   UPDATE public.training_sessions SET status='cancelled' WHERE id=v_former_session;
 
+  PERFORM set_config('request.jwt.claim.sub',v_manager::text,true);
+
+  -- Each case is a real bounded session with a valid canonical result and
+  -- V1 prescription. Only the selected Measurement V1 predicate differs.
+  FOR v_case IN
+    SELECT * FROM (VALUES
+      ('no_linked_attempt', 'none', 1, 'complete', 5, 3, 2),
+      ('non_finalized', 'finalized_incomplete', 1, 'complete', 5, 3, 2),
+      ('wrong_version', 'finalized_completed', 2, 'complete', 5, 3, 2),
+      ('incomplete_quality', 'finalized_completed', 1, 'partial', 5, 3, 2),
+      ('step_mismatch', 'finalized_completed', 1, 'complete', 4, 2, 2),
+      ('bad_sum', 'finalized_completed', 1, 'complete', 5, 2, 2)
+    ) AS cases(case_name,finalization_state,measurement_version,measurement_quality,prescribed_steps,completed_blocks,skipped_blocks)
+  LOOP
+    INSERT INTO public.training_sessions(athlete_id,coach_user_id,team_id,workout_id,scheduled_date,status)
+    VALUES (v_athlete,v_manager,v_team,v_workout,v_as_of - 3,'scheduled') RETURNING id INTO v_case_session;
+    UPDATE public.training_session_prescriptions
+    SET step_count=5, steps='[{"n":1},{"n":2},{"n":3},{"n":4},{"n":5}]'::jsonb
+    WHERE session_id=v_case_session;
+    INSERT INTO public.workout_results(training_session_id,athlete_id)
+    VALUES (v_case_session,v_athlete) RETURNING id INTO v_case_result;
+    IF v_case.finalization_state <> 'none' THEN
+      INSERT INTO public.workout_session_attempts(
+        id,training_session_id,athlete_id,workout_result_id,started_at,finalized_at,
+        finalization_state,prescription_schema_version,prescribed_work_ms,prescribed_rest_ms,
+        prescribed_total_ms,prescribed_step_count,completed_work_blocks,skipped_work_blocks,
+        measurement_version,measurement_quality
+      ) VALUES (
+        gen_random_uuid(),v_case_session,v_athlete,v_case_result,clock_timestamp(),
+        CASE WHEN v_case.finalization_state='open' THEN NULL ELSE clock_timestamp() END,
+        v_case.finalization_state,1,300000,0,300000,v_case.prescribed_steps,v_case.completed_blocks,v_case.skipped_blocks,
+        v_case.measurement_version,v_case.measurement_quality
+      );
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM public.list_my_team_attention_sessions(v_team)
+      WHERE session_id=v_case_session AND has_canonical_completion
+        AND adherence_completed_work_blocks IS NULL AND adherence_prescribed_work_blocks IS NULL
+    ) OR (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_case_session) <> 1 THEN
+      RAISE EXCEPTION '14B2 Measurement V1 rejection fixture % failed', v_case.case_name;
+    END IF;
+  END LOOP;
+  -- Structural guarantees for malformed states the real schema refuses.
+  IF (SELECT count(*) FROM pg_constraint WHERE conrelid='public.workout_session_attempts'::regclass AND conname='workout_session_attempts_metrics_nonnegative' AND convalidated) <> 1
+     OR (SELECT count(*) FROM pg_constraint WHERE conrelid='public.training_session_prescriptions'::regclass AND conname='training_session_prescriptions_schema_version_check' AND convalidated) <> 1
+     OR (SELECT count(*) FROM pg_constraint WHERE conrelid='public.training_session_prescriptions'::regclass AND conname='training_session_prescriptions_step_count_check' AND convalidated) <> 1 THEN
+    RAISE EXCEPTION '14B2 Measurement V1 structural protections are missing';
+  END IF;
+
   PERFORM set_config('request.jwt.claim.sub',v_manager::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
   -- The base grant is intentionally present for ACT users; a coach with VIEW
   -- only must nevertheless receive no attempt rows through RLS.
   IF EXISTS (SELECT 1 FROM public.workout_session_attempts WHERE training_session_id=v_current_session) THEN
     RAISE EXCEPTION '14B2 VIEW actor read an ACT-only attempt row';
   END IF;
-  IF (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team)) <> 2
+  IF (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team)) <> 8
      OR EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE as_of_date<>v_as_of)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session AND athlete_id=v_athlete AND has_canonical_completion)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_former_session AND athlete_id IS NULL AND is_cancelled AND has_canonical_completion)
