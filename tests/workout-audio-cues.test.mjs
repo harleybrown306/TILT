@@ -25,7 +25,44 @@ const input = (changes = {}) => ({ athleteId: id(1), sessionId: id(2), workoutId
 const begin = (changes = {}) => state.beginAttempt(input(changes), start, uuid);
 const change = (checkpoint, command, at, observed = true) => state.changeAttempt(checkpoint, command, start + at, uuid, observed);
 const plan = (before, result, command = "tick", extra = {}) => cues.planWorkoutAudioCues({ before, after: result.checkpoint, command, events: result.events, foreground: true, recovery: false, ...extra });
+const planVoice = (before, result, command = "tick", extra = {}) => cues.planWorkoutVoicePrompts({ before, after: result.checkpoint, command, events: result.events, foreground: true, recovery: false, ...extra });
 const kinds = (planned) => planned.map((cue) => cue.kind);
+
+function audioHarness(speech = {}) {
+  const oldWindow = globalThis.window;
+  const effects = [], oscillatorStarts = [];
+  class FakeAudioContext {
+    state = "running"; currentTime = 0; destination = {};
+    resume() { return Promise.resolve(); } close() { this.state = "closed"; return Promise.resolve(); }
+    createGain() { const gain = { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() { return this; } }; return gain; }
+    createOscillator() {
+      return { type: "sine", frequency: { setValueAtTime() {} }, connect(node) { return node; }, start() { oscillatorStarts.push("start"); }, stop() {} };
+    }
+  }
+  const fakeReact = {
+    useState: (value) => [value, () => {}], useRef: (value) => ({ current: value }),
+    useCallback: (fn) => fn, useEffect: (fn) => effects.push(fn),
+  };
+  globalThis.window = { AudioContext: FakeAudioContext, ...speech };
+  const audio = load("src/components/workout/use-workout-audio.ts", { react: fakeReact, "@/lib/workout-audio-cues": cues });
+  const controller = audio.useWorkoutAudio();
+  const cleanups = effects.map((effect) => effect()).filter(Boolean);
+  return {
+    controller, oscillatorStarts, window: globalThis.window,
+    cleanup: () => cleanups.forEach((cleanup) => cleanup()),
+    restore: () => { globalThis.window = oldWindow; },
+  };
+}
+
+function qualifyingRest() {
+  const initial = begin().checkpoint;
+  const rest = change(initial, "tick", 20_000);
+  return { initial, rest };
+}
+
+function transition(before, result, command = "tick", extra = {}) {
+  return { before, after: result.checkpoint, command, events: result.events, foreground: true, recovery: false, ...extra };
+}
 
 test("foreground work start emits exactly one start cue", () => {
   const result = begin();
@@ -88,6 +125,133 @@ test("claimed cues do not replay after sound is re-enabled", () => {
   // left to play when the athlete turns sound back on.
   assert.equal(cues.claimWorkoutAudioCues(planned, emitted).length, 1);
   assert.equal(cues.claimWorkoutAudioCues(planned, emitted).length, 0);
+});
+test("qualifying foreground rest announces the normalized frozen next exercise once", () => {
+  const initial = begin({ steps: [step({ restSeconds: 4 }), step({ id: id(5), position: 1, exerciseName: "  Split\n\tStance   Cradle  " })] }).checkpoint;
+  const rest = change(initial, "tick", 20_000);
+  const prompts = planVoice(initial, rest);
+  assert.deepEqual(prompts.map((prompt) => [prompt.kind, prompt.text]), [["upcoming_exercise", "Next up, Split Stance Cradle. Ready."]]);
+  const claimed = new Set();
+  assert.equal(cues.claimWorkoutVoicePrompts(prompts, claimed).length, 1);
+  assert.equal(cues.claimWorkoutVoicePrompts(prompts, claimed).length, 0);
+});
+test("voice excludes short, terminal, recovered, malformed, and first-work transitions", () => {
+  const short = begin({ steps: [step({ restSeconds: 3 }), step({ id: id(5), position: 1 })] }).checkpoint;
+  assert.equal(planVoice(short, change(short, "tick", 20_000)).length, 0);
+  const zero = begin({ steps: [step({ restSeconds: 0 }), step({ id: id(5), position: 1 })] }).checkpoint;
+  assert.equal(planVoice(zero, change(zero, "tick", 20_000)).length, 0);
+  const terminal = begin({ steps: [step({ restSeconds: 4 })] }).checkpoint;
+  assert.equal(planVoice(terminal, change(terminal, "tick", 20_000)).length, 0);
+  const malformed = begin({ steps: [step({ restSeconds: 4 }), step({ id: id(5), position: 1, exerciseName: "\u0000bad" })] }).checkpoint;
+  assert.equal(planVoice(malformed, change(malformed, "tick", 20_000)).length, 0);
+  const overLimit = begin({ steps: [step({ restSeconds: 4 }), step({ id: id(5), position: 1, exerciseName: "x".repeat(81) })] }).checkpoint;
+  assert.equal(planVoice(overLimit, change(overLimit, "tick", 20_000)).length, 0);
+  const exactLimit = begin({ steps: [step({ restSeconds: 4 }), step({ id: id(5), position: 1, exerciseName: "x".repeat(80) })] }).checkpoint;
+  assert.equal(planVoice(exactLimit, change(exactLimit, "tick", 20_000)).length, 1);
+  const initial = begin().checkpoint;
+  assert.equal(planVoice(null, { checkpoint: initial, events: [] }, "begin").length, 0);
+  assert.equal(planVoice(initial, change(initial, "recover", 20_000, false), "recover", { foreground: false, recovery: true }).length, 0);
+});
+test("voice adapter claims unavailable speech APIs without historical retry", () => {
+  const harness = audioHarness();
+  const { initial, rest } = qualifyingRest();
+  try {
+    harness.controller.unlock();
+    assert.doesNotThrow(() => harness.controller.handleTransition(transition(initial, rest)));
+    const spoken = [];
+    harness.window.speechSynthesis = { cancel() {}, speak: (utterance) => spoken.push(utterance.text) };
+    harness.window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
+    harness.controller.handleTransition(transition(initial, rest));
+    assert.deepEqual(spoken, []);
+    const noUtterance = qualifyingRest();
+    delete harness.window.SpeechSynthesisUtterance;
+    assert.doesNotThrow(() => harness.controller.handleTransition(transition(noUtterance.initial, noUtterance.rest)));
+    harness.window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
+    harness.controller.handleTransition(transition(noUtterance.initial, noUtterance.rest));
+    assert.deepEqual(spoken, []);
+  } finally { harness.cleanup(); harness.restore(); }
+});
+test("voice adapter contains utterance construction and speak failures without retry", () => {
+  for (const mode of ["constructor", "speak"]) {
+    const spoken = [];
+    const synthesis = { cancel() {}, speak: mode === "speak" ? () => { throw Error("speak failed"); } : (utterance) => spoken.push(utterance.text) };
+    const Utterance = mode === "constructor" ? class { constructor() { throw Error("construct failed"); } } : class { constructor(text) { this.text = text; } };
+    const harness = audioHarness({ speechSynthesis: synthesis, SpeechSynthesisUtterance: Utterance });
+    const { initial, rest } = qualifyingRest();
+    try {
+      harness.controller.unlock();
+      assert.doesNotThrow(() => harness.controller.handleTransition(transition(initial, rest)));
+      synthesis.speak = (utterance) => spoken.push(utterance.text);
+      harness.window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
+      harness.controller.handleTransition(transition(initial, rest));
+      assert.deepEqual(spoken, []);
+    } finally { harness.cleanup(); harness.restore(); }
+  }
+});
+test("muted voice is claimed, unmute does not replay, and muting cancels active speech", () => {
+  const spoken = []; let canceled = 0;
+  const harness = audioHarness({ speechSynthesis: { cancel: () => { canceled++; }, speak: (utterance) => spoken.push(utterance.text) }, SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } } });
+  const { initial, rest } = qualifyingRest();
+  try {
+    harness.controller.handleTransition(transition(initial, rest));
+    assert.deepEqual(spoken, []);
+    harness.controller.setEnabled(true);
+    harness.controller.handleTransition(transition(initial, rest));
+    assert.deepEqual(spoken, []);
+    const later = qualifyingRest();
+    harness.controller.handleTransition(transition(later.initial, later.rest));
+    assert.deepEqual(spoken, ["Next up, Cradle. Ready."]);
+    harness.controller.setEnabled(false);
+    assert.ok(canceled >= 2);
+  } finally { harness.cleanup(); harness.restore(); }
+});
+test("pause, rest skip, and hidden transitions cancel speech without replay", () => {
+  for (const command of ["pause", "skip", "hidden"]) {
+    const spoken = []; let canceled = 0;
+    const harness = audioHarness({ speechSynthesis: { cancel: () => { canceled++; }, speak: (utterance) => spoken.push(utterance.text) }, SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } } });
+    const { initial, rest } = qualifyingRest();
+    try {
+      harness.controller.unlock();
+      harness.controller.handleTransition(transition(initial, rest));
+      const at = command === "skip" ? 21_000 : 20_500;
+      const next = change(rest.checkpoint, command, at);
+      harness.controller.handleTransition(transition(rest.checkpoint, next, command, command === "hidden" ? { foreground: false } : {}));
+      assert.ok(canceled >= 2, command);
+      const resumed = command === "pause" ? change(next.checkpoint, "resume", 21_000) : command === "hidden" ? change(next.checkpoint, "visible", 21_000) : next;
+      harness.controller.handleTransition(transition(next.checkpoint, resumed, command === "pause" ? "resume" : command === "hidden" ? "visible" : "skip", { foreground: false }));
+      assert.deepEqual(spoken, ["Next up, Cradle. Ready."], command);
+    } finally { harness.cleanup(); harness.restore(); }
+  }
+});
+test("unmount and cancel failure are contained; work-start beep remains independent", () => {
+  let canceled = 0; let failCancel = false;
+  const harness = audioHarness({ speechSynthesis: { cancel: () => { canceled++; if (failCancel) throw Error("cancel failed"); }, speak() {} }, SpeechSynthesisUtterance: class { constructor(text) { this.text = text; } } });
+  const { initial, rest } = qualifyingRest();
+  try {
+    harness.controller.unlock();
+    harness.controller.handleTransition(transition(initial, rest));
+    failCancel = true;
+    const work = change(rest.checkpoint, "tick", 25_000);
+    assert.doesNotThrow(() => harness.controller.handleTransition(transition(rest.checkpoint, work)));
+    assert.ok(canceled >= 2);
+    assert.equal(harness.oscillatorStarts.length, 2);
+    assert.doesNotThrow(() => harness.cleanup());
+  } finally { harness.restore(); }
+});
+test("ten-second and completion transitions remain beep-only", () => {
+  const initial = begin().checkpoint;
+  const tenSeconds = change(initial, "tick", 10_001);
+  assert.deepEqual(kinds(plan(initial, tenSeconds)), ["ten_seconds"]);
+  assert.deepEqual(planVoice(initial, tenSeconds), []);
+  const finalStart = begin({ steps: [step({ durationSeconds: 20, restSeconds: 0 })] }).checkpoint;
+  const complete = change(finalStart, "tick", 20_000);
+  assert.deepEqual(kinds(plan(finalStart, complete)), ["workout_complete"]);
+  assert.deepEqual(planVoice(finalStart, complete), []);
+  const finalRestStart = begin({ steps: [step({ durationSeconds: 20, restSeconds: 4 })] }).checkpoint;
+  const finalRest = change(finalRestStart, "tick", 20_000);
+  const finalRestComplete = change(finalRest.checkpoint, "tick", 24_000);
+  assert.deepEqual(kinds(plan(finalRest.checkpoint, finalRestComplete)), ["workout_complete"]);
+  assert.deepEqual(planVoice(finalRest.checkpoint, finalRestComplete), []);
 });
 test("real audio unlock failure is contained", () => {
   const oldWindow = globalThis.window;

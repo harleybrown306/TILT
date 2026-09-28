@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { claimWorkoutAudioCues, planWorkoutAudioCues, type WorkoutAudioCueKind, type WorkoutAudioTransition } from "@/lib/workout-audio-cues";
+import { claimWorkoutAudioCues, claimWorkoutVoicePrompts, planWorkoutAudioCues, planWorkoutVoicePrompts, type WorkoutAudioCueKind, type WorkoutAudioTransition, type WorkoutVoicePrompt } from "@/lib/workout-audio-cues";
 
 type AudioWindow = Window & { webkitAudioContext?: typeof AudioContext };
 
@@ -17,6 +17,12 @@ export function useWorkoutAudio() {
   const enabled = useRef(false);
   const context = useRef<AudioContext | null>(null);
   const emitted = useRef(new Set<string>());
+
+  const cancelSpeech = useCallback(() => {
+    try { window.speechSynthesis?.cancel(); } catch {
+      // Speech is optional. A browser queue failure must not affect training.
+    }
+  }, []);
 
   const unlock = useCallback(() => {
     enabled.current = true;
@@ -34,8 +40,9 @@ export function useWorkoutAudio() {
   const setEnabled = useCallback((value: boolean) => {
     enabled.current = value;
     setSoundEnabled(value);
+    if (!value) cancelSpeech();
     if (value) unlock();
-  }, [unlock]);
+  }, [unlock, cancelSpeech]);
 
   const play = useCallback((kind: WorkoutAudioCueKind) => {
     const audio = context.current;
@@ -57,17 +64,42 @@ export function useWorkoutAudio() {
     }
   }, []);
 
+  const speak = useCallback((prompt: WorkoutVoicePrompt) => {
+    if (!enabled.current) return;
+    try {
+      const synthesis = window.speechSynthesis;
+      const Utterance = window.SpeechSynthesisUtterance;
+      if (!synthesis || !Utterance) return;
+      // The queue is never allowed to carry prior-phase instructions forward.
+      synthesis.cancel();
+      const utterance = new Utterance(prompt.text);
+      synthesis.speak(utterance);
+    } catch {
+      // Installed voices and browser speech behavior are not workout contracts.
+    }
+  }, []);
+
   const handleTransition = useCallback((transition: WorkoutAudioTransition) => {
+    const voicePrompts = planWorkoutVoicePrompts(transition);
+    // Work-start beeps are authoritative. Pause, backgrounding, skipping a
+    // rest, or reaching terminal guidance also invalidates any queued speech.
+    if (transition.command === "hidden" || transition.command === "pause"
+        || transition.after.phase === "work" || transition.after.phase === "finished"
+        || (transition.command === "skip" && voicePrompts.length === 0)) {
+      cancelSpeech();
+    }
     for (const audioCue of claimWorkoutAudioCues(planWorkoutAudioCues(transition), emitted.current)) {
       play(audioCue.kind);
     }
-  }, [play]);
+    for (const prompt of claimWorkoutVoicePrompts(voicePrompts, emitted.current)) speak(prompt);
+  }, [play, speak, cancelSpeech]);
 
   useEffect(() => () => {
+    cancelSpeech();
     const audio = context.current;
     context.current = null;
     if (audio && audio.state !== "closed") void audio.close().catch(() => {});
-  }, []);
+  }, [cancelSpeech]);
 
   return { soundEnabled, unlock, setEnabled, handleTransition };
 }
