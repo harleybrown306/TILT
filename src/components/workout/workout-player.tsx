@@ -7,6 +7,7 @@ import { completeTrainingSession } from "@/lib/complete-training-session";
 import { remainingMs, type WorkoutStep } from "@/lib/workout-session-state";
 import { useWorkoutSession } from "./use-workout-session";
 import ExerciseVideo, { safeVideoUrl } from "./exercise-video";
+import { useWorkoutAudio } from "./use-workout-audio";
 
 type WorkoutPlayerProps = {
   workoutName: string;
@@ -27,8 +28,9 @@ function formatClock(seconds: number) {
 export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, athleteId, workoutId, steps: prescribedSteps }: WorkoutPlayerProps) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
+  const audio = useWorkoutAudio();
   const input = useMemo(() => ({ workoutName, sessionId, actorUserId, athleteId, workoutId, steps: prescribedSteps }), [workoutName, sessionId, actorUserId, athleteId, workoutId, prescribedSteps]);
-  const { checkpoint, ready, warning, run, flush, finalizeAttempt } = useWorkoutSession(input);
+  const { checkpoint, ready, warning, run, flush, finalizeAttempt } = useWorkoutSession(input, { onStateTransition: audio.handleTransition });
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const savingRef = useRef(false);
@@ -41,7 +43,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
   const nextVideoUrl = safeVideoUrl(steps[currentStepIndex + 1]?.videoUrl);
   const expected = { index: currentStepIndex, phase, paused: isPaused };
   const storageWarning = warning ? <p role="status" className="mb-4 text-sm text-amber-300">{warning}</p> : null;
-  function startWorkout() { void run("begin"); }
+  function startWorkout() { audio.unlock(); void run("begin"); }
   function skipPhase() { void run("skip", expected); }
 
   async function finishWorkout() {
@@ -140,6 +142,18 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
         <p className="text-sm text-slate-400">
           Exercise {currentStepIndex + 1} of {steps.length}
         </p>
+      </div>
+
+      <div className="mt-4 flex justify-end">
+        <button
+          type="button"
+          aria-pressed={audio.soundEnabled}
+          aria-label={audio.soundEnabled ? "Turn workout sound off" : "Turn workout sound on"}
+          onClick={() => audio.setEnabled(!audio.soundEnabled)}
+          className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800"
+        >
+          Sound: {audio.soundEnabled ? "On" : "Off"}
+        </button>
       </div>
 
       <div className="py-10 text-center">

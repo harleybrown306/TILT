@@ -4,16 +4,20 @@ import { createClient } from "@/lib/supabase/client";
 import { finalizePersistedWorkoutAttempt } from "@/lib/workout-attempt-finalization";
 import { beginAttempt, changeAttempt, recoveryNow, type Checkpoint, type Command, type WorkoutStep } from "@/lib/workout-session-state";
 import { flushEvents, mutateBundle, saveChange, storedCheckpoint } from "@/lib/workout-session-storage";
+import type { WorkoutAudioTransition } from "@/lib/workout-audio-cues";
 
-type Input = { actorUserId: string; athleteId: string; sessionId: string; workoutId: string; workoutName: string; steps: WorkoutStep[] };
-export function useWorkoutSession(input: Input) {
+type SessionInput = { actorUserId: string; athleteId: string; sessionId: string; workoutId: string; workoutName: string; steps: WorkoutStep[] };
+type RuntimeOptions = { onStateTransition?: (transition: WorkoutAudioTransition) => void };
+export function useWorkoutSession(input: SessionInput, runtime: RuntimeOptions = {}) {
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [ready, setReady] = useState(false); const [warning, setWarning] = useState("");
   const current = useRef<Checkpoint | null>(null); const busy = useRef(Promise.resolve());
   const clock = useRef({ logical: 0, performance: 0, wall: 0 });
   const lastVisibility = useRef<string | null>(null);
   const activeActor = useRef(input.actorUserId);
+  const transitionListener = useRef(runtime.onStateTransition);
   const [supabase] = useState(createClient);
+  useEffect(() => { transitionListener.current = runtime.onStateTransition; }, [runtime.onStateTransition]);
   const verifyActor = useCallback(async () => {
     const { data: { user }, error } = await supabase.auth.getUser(); return error ? null : user?.id ?? null;
   }, [supabase]);
@@ -49,20 +53,29 @@ export function useWorkoutSession(input: Input) {
       if (activeActor.current !== input.actorUserId || (command === "begin" && await verifyActor() !== input.actorUserId)) { setWarning("Your signed-in account changed. Reload before continuing."); return; }
       try {
         let createdEvents = false;
+        let audioTransition: WorkoutAudioTransition | undefined;
         const bundle = await mutateBundle(input.athleteId, (bundle) => {
           const before = bundle.outbox.length;
           const cp = storedCheckpoint(bundle, input.athleteId, input.sessionId);
           if (command === "begin") {
             if (cp) return;
-            saveChange(bundle, beginAttempt(input, Date.now(), crypto.randomUUID.bind(crypto)), Date.now());
+            const change = beginAttempt({
+              athleteId: input.athleteId, sessionId: input.sessionId, workoutId: input.workoutId,
+              workoutName: input.workoutName, steps: input.steps,
+            }, Date.now(), crypto.randomUUID.bind(crypto));
+            saveChange(bundle, change, Date.now());
+            audioTransition = { before: null, after: change.checkpoint, command, events: change.events, foreground: document.visibilityState === "visible", recovery: false };
           } else if (cp && !cp.finalized) {
             if (expected && (cp.index !== expected.index || cp.phase !== expected.phase || (cp.pausedAt !== null) !== expected.paused)) return;
             const time = current.current?.attemptId === cp.attemptId ? Math.max(now(), cp.logicalNow) : recoveryNow(cp, Date.now());
-            saveChange(bundle, changeAttempt(cp, command, time, crypto.randomUUID.bind(crypto), document.visibilityState === "visible" && command !== "hidden" && command !== "visible"), Date.now());
+            const change = changeAttempt(cp, command, time, crypto.randomUUID.bind(crypto), document.visibilityState === "visible" && command !== "hidden" && command !== "visible");
+            saveChange(bundle, change, Date.now());
+            audioTransition = { before: cp, after: change.checkpoint, command, events: change.events, foreground: document.visibilityState === "visible" && command !== "hidden" && command !== "visible", recovery: false };
           }
           createdEvents = bundle.outbox.length > before;
         });
         const cp = storedCheckpoint(bundle, input.athleteId, input.sessionId); if (cp) publish(cp);
+        if (audioTransition) transitionListener.current?.(audioTransition);
         if (bundle.dropped || bundle.outbox.some((e) => e.status !== "pending")) setWarning("Some workout observations need synchronization review. Workout completion is still available.");
         if (createdEvents || command === "finalize") void flush();
       } catch { setWarning("Workout recovery storage is unavailable. Retry; telemetry will not prevent saving a finished workout."); }
