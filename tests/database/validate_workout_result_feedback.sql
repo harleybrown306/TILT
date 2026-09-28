@@ -44,6 +44,8 @@ DECLARE
   v_note text;
   v_denied boolean;
   v_before_count integer;
+  v_option_ids uuid[];
+  v_option_names text[];
 BEGIN
   INSERT INTO auth.users(id, aud, role, email, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
   SELECT id, 'authenticated', 'authenticated', v_marker || '-' || suffix || '@example.test', clock_timestamp(), '{"provider":"email"}'::jsonb, '{}'::jsonb, clock_timestamp(), clock_timestamp()
@@ -130,6 +132,12 @@ BEGIN
   IF v_feedback IS NULL OR NOT EXISTS (SELECT 1 FROM public.workout_result_feedback WHERE id = v_feedback AND submitted_by_profile_id = v_self AND coach_note = 'coach note') THEN
     RAISE EXCEPTION '15B2 self selected submission failed';
   END IF;
+  SELECT array_agg(workout_exercise_id), array_agg(exercise_name)
+  INTO v_option_ids, v_option_names
+  FROM public.list_my_workout_feedback_exercise_options(v_result);
+  IF v_option_ids IS DISTINCT FROM ARRAY[v_workout_exercise] OR v_option_names IS NULL OR array_length(v_option_names, 1) <> 1 THEN
+    RAISE EXCEPTION '15C1 performed exercise options did not match finalized immutable evidence';
+  END IF;
   IF (SELECT already_submitted FROM public.submit_my_workout_feedback(v_result, 'selected', v_workout_exercise, 'coach note')) IS DISTINCT FROM true THEN
     RAISE EXCEPTION '15B2 identical retry was not idempotent';
   END IF;
@@ -144,6 +152,8 @@ BEGIN
   IF v_existing IS NULL THEN RAISE EXCEPTION '15B2 unfinalized non-selected feedback failed'; END IF;
   v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_no_attempt_result, 'selected', v_workout_exercise, NULL); EXCEPTION WHEN others THEN v_denied := true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '15B2 selected no-attempt feedback was allowed'; END IF;
+  v_denied := false; BEGIN PERFORM * FROM public.list_my_workout_feedback_exercise_options(v_unfinalized_result); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '15C1 unfinalized attempt options were allowed'; END IF;
   v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_noncompleted_result, 'none', NULL, NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '15B2 non-completed session feedback was allowed'; END IF;
   v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_mismatch_result, 'none', NULL, NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
@@ -164,13 +174,19 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_view_guardian::text, true);
   v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_no_attempt_result, 'none', NULL, NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '15B2 guardian without ACT wrote feedback'; END IF;
+  v_denied := false; BEGIN PERFORM * FROM public.list_my_workout_feedback_exercise_options(v_result); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '15C1 guardian without ACT received options'; END IF;
   PERFORM set_config('request.jwt.claim.sub', v_revoked::text, true);
   v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_no_attempt_result, 'none', NULL, NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '15B2 revoked guardian wrote feedback'; END IF;
+  v_denied := false; BEGIN PERFORM * FROM public.list_my_workout_feedback_exercise_options(v_result); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '15C1 revoked guardian received options'; END IF;
   FOR v_existing IN SELECT id FROM (VALUES (v_coach), (v_assistant), (v_admin), (v_sibling), (v_unrelated)) AS actors(id) LOOP
     PERFORM set_config('request.jwt.claim.sub', v_existing::text, true);
     v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_no_attempt_result, 'none', NULL, NULL); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
     IF NOT v_denied THEN RAISE EXCEPTION '15B2 non-ACT actor wrote feedback'; END IF;
+    v_denied := false; BEGIN PERFORM * FROM public.list_my_workout_feedback_exercise_options(v_result); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
+    IF NOT v_denied THEN RAISE EXCEPTION '15C1 non-ACT actor received options'; END IF;
   END LOOP;
 
   PERFORM set_config('request.jwt.claim.sub', v_self::text, true);
@@ -221,6 +237,11 @@ BEGIN
      OR NOT has_function_privilege('authenticated', 'public.submit_my_workout_feedback(uuid,text,uuid,text)', 'EXECUTE') THEN
     RAISE EXCEPTION '15B2 feedback ACL contract failed';
   END IF;
+  IF has_function_privilege('public', 'public.list_my_workout_feedback_exercise_options(uuid)', 'EXECUTE')
+     OR has_function_privilege('anon', 'public.list_my_workout_feedback_exercise_options(uuid)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.list_my_workout_feedback_exercise_options(uuid)', 'EXECUTE') THEN
+    RAISE EXCEPTION '15C1 options ACL contract failed';
+  END IF;
   IF EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.submit_my_workout_feedback(uuid,text,uuid,text)'::regprocedure AND (NOT prosecdef OR NOT (coalesce(proconfig, ARRAY[]::text[]) @> ARRAY['search_path=""'])))
      OR EXISTS (SELECT 1 FROM pg_proc WHERE oid = 'public.get_my_workout_feedback(uuid)'::regprocedure AND (NOT prosecdef OR NOT (coalesce(proconfig, ARRAY[]::text[]) @> ARRAY['search_path=""']))) THEN
     RAISE EXCEPTION '15B2 feedback function hardening failed';
@@ -243,6 +264,11 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', v_guardian::text, true);
   v_denied := false; BEGIN PERFORM * FROM public.submit_my_workout_feedback(v_result, 'none', NULL, NULL); EXCEPTION WHEN others THEN v_denied := true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '15B2 guardian ambiguous result write was allowed'; END IF;
+  PERFORM set_config('request.jwt.claim.sub', v_self::text, true);
+  v_denied := false; BEGIN PERFORM * FROM public.list_my_workout_feedback_exercise_options(v_result); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '15C1 ambiguous result A options were allowed'; END IF;
+  v_denied := false; BEGIN PERFORM * FROM public.list_my_workout_feedback_exercise_options(v_duplicate_result); EXCEPTION WHEN insufficient_privilege THEN v_denied := true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '15C1 ambiguous result B options were allowed'; END IF;
 END;
 $validator$;
 
