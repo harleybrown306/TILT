@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import WorkoutPlayer from "@/components/workout/workout-player";
 import CompletedWorkoutDelivery from "@/components/workout/completed-workout-delivery";
 import WorkoutFeedback from "@/components/workout/workout-feedback";
+import WorkoutPreview from "@/components/workout/workout-preview";
 import { mapSessionPrescription, type SessionPrescriptionRow } from "@/lib/training-session-prescription";
 
 type PageProps = {
@@ -59,23 +60,6 @@ function formatDate(date: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(`${date}T12:00:00`));
-}
-
-function formatTime(seconds: number | null) {
-  if (!seconds) return "—";
-
-  if (seconds < 60) {
-    return `${seconds} sec`;
-  }
-
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-
-  if (remainingSeconds === 0) {
-    return `${minutes} min`;
-  }
-
-  return `${minutes}m ${remainingSeconds}s`;
 }
 
 export default async function TrainingSessionPage({
@@ -232,91 +216,7 @@ export default async function TrainingSessionPage({
           )}
         </header>
 
-        <section className="py-8">
-          <div className="mb-5 flex items-end justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-                Workout
-              </p>
-
-              <h2 className="mt-1 text-2xl font-semibold">
-                Exercise sequence
-              </h2>
-            </div>
-
-            <p className="text-sm text-slate-400">
-              {workoutSteps.length}{" "}
-              {workoutSteps.length === 1 ? "step" : "steps"}
-            </p>
-          </div>
-
-          {workoutSteps.length === 0 ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
-              No exercises are available for this workout.
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {workoutSteps.map((step, index) => {
-                const exercise = step;
-
-                return (
-                  <div
-                    key={step.id}
-                    className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
-                  >
-                    <div className="flex gap-4">
-                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 font-bold text-slate-950">
-                        {index + 1}
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-col justify-between gap-3 sm:flex-row">
-                          <div>
-                            <h3 className="text-lg font-semibold">
-                              {exercise.exerciseName}
-                            </h3>
-
-                            {step.offHand && (
-                              <p className="mt-1 text-sm font-medium text-emerald-400">
-                                Off hand
-                              </p>
-                            )}
-                          </div>
-
-                          <div className="flex gap-5 text-sm">
-                            <div>
-                              <p className="text-slate-500">
-                                Work
-                              </p>
-                              <p className="mt-1 font-medium">
-                                {formatTime(step.durationSeconds)}
-                              </p>
-                            </div>
-
-                            <div>
-                              <p className="text-slate-500">
-                                Rest
-                              </p>
-                              <p className="mt-1 font-medium">
-                                {formatTime(step.restSeconds)}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {step.notes && (
-                          <p className="mt-3 text-sm text-slate-400">
-                            {step.notes}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
+        <WorkoutPreview steps={workoutSteps} />
 
         <div className="border-t border-slate-800 pt-8">
   {canActForTraining && session.athlete_id && isCompleted && !resultError && <CompletedWorkoutDelivery actorUserId={user.id} athleteId={session.athlete_id} sessionId={session.id} resultExists={Boolean(results?.length)} />}

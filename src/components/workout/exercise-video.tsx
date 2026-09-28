@@ -9,7 +9,8 @@ export default function ExerciseVideo({ url }: { url: string | null }) {
   const video = useRef<HTMLVideoElement>(null); const [paused, setPaused] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   useEffect(() => { if (video.current) { video.current.muted = true; void video.current.play().catch(() => setPaused(true)); } }, [url]);
-  if (!url || unavailable) return null;
+  if (!url) return null;
+  if (unavailable) return <p role="status" className="mt-4 text-sm text-slate-400">Demo unavailable</p>;
   return <div className="mx-auto mt-6 max-w-xl">
     <video ref={video} src={url} autoPlay muted loop playsInline preload="metadata"
       className="w-full rounded-xl" onError={() => setUnavailable(true)} />
