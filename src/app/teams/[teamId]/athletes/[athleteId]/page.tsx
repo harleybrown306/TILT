@@ -16,6 +16,14 @@ type PageProps = {
 
 type RosteredAthlete = { athlete_id: string; display_name: string };
 
+type StaffFeedback = {
+  scheduled_date: string;
+  workout_name: string | null;
+  q1_response_state: "selected" | "none" | "skipped";
+  selected_exercise_label: string | null;
+  coach_note: string | null;
+};
+
 type Workout = {
   id: string;
   name: string;
@@ -120,10 +128,15 @@ export default async function AthleteDetailPage({
     notFound();
   }
 
+  const feedbackRequest = supabase.rpc("list_my_team_athlete_workout_feedback", {
+    p_team_id: teamId,
+    p_athlete_id: athleteId,
+  });
+
   // The roster projection authorizes through the canonical team-analytics
   // VIEW boundary and proves durable team containment before session reads.
   // It grants no management or training-action capability.
-  const { data: sessions, error: sessionError } = await supabase
+  const sessionRequest = supabase
     .from("training_sessions")
     .select(`
       id,
@@ -161,6 +174,15 @@ export default async function AthleteDetailPage({
     .eq("team_id", teamId)
     .eq("athlete_id", athleteId)
     .order("scheduled_date", { ascending: false });
+
+  const [
+    { data: feedback, error: feedbackError },
+    { data: sessions, error: sessionError },
+  ] = await Promise.all([feedbackRequest, sessionRequest]);
+
+  if (feedbackError) {
+    console.error("Unable to load athlete feedback:", feedbackError.message);
+  }
 
   if (sessionError) {
     console.error(
@@ -283,6 +305,56 @@ export default async function AthleteDetailPage({
               {completionRate}%
             </p>
           </div>
+        </section>
+
+        <section className="mb-10" aria-labelledby="feedback-heading">
+          <div className="mb-4">
+            <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
+              Feedback
+            </p>
+
+            <h2 id="feedback-heading" className="mt-1 text-2xl font-semibold">
+              Post-workout feedback
+            </h2>
+
+            <p className="mt-1 text-sm text-slate-400">
+              Feedback submitted by this athlete after completed workouts.
+            </p>
+          </div>
+
+          {(feedback as StaffFeedback[] | null)?.length ? (
+            <div className="space-y-4">
+              {(feedback as StaffFeedback[]).map((item, index) => (
+                <article
+                  key={`${item.scheduled_date}-${index}`}
+                  className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
+                >
+                  <p className="text-sm font-semibold text-emerald-400">
+                    {formatDate(item.scheduled_date)}
+                  </p>
+                  <h3 className="mt-2 text-xl font-semibold">
+                    {item.workout_name ?? "Assigned workout"}
+                  </h3>
+                  <p className="mt-3 text-sm text-slate-300">
+                    {item.q1_response_state === "selected"
+                      ? `Most challenging: ${item.selected_exercise_label ?? "Selected exercise"}`
+                      : item.q1_response_state === "none"
+                        ? "Most challenging: None"
+                        : "Most challenging: Skipped"}
+                  </p>
+                  {item.coach_note && (
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">
+                      {item.coach_note}
+                    </p>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">
+              No post-workout feedback has been submitted yet.
+            </div>
+          )}
         </section>
 
         <section className="mb-10">

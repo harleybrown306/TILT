@@ -33,6 +33,9 @@ function fixture({ roster = "canonical-roster-success" } = {}) {
     auth: { getUser: async () => ({ data: { user: { id: profileId } } }) },
     rpc(name, payload) {
       calls.push({ kind: "rpc", name, payload });
+      if (name === "list_my_team_athlete_workout_feedback") {
+        return Promise.resolve({ data: [], error: null });
+      }
       if (roster !== "canonical-roster-success" && roster !== "canonical-roster-success-repeat" && roster !== "other-team") return Promise.resolve({ data: null, error: { message: `${roster} denied` } });
       if (roster === "other-team") return Promise.resolve({ data: [], error: null });
       return Promise.resolve({ data: [{ athlete_id: athleteId, display_name: "Durable athlete" }], error: null });
@@ -83,6 +86,11 @@ for (const roster of ["canonical-roster-success", "canonical-roster-success-repe
       kind: "rpc",
       name: "list_my_team_rostered_athlete_identities",
       payload: { p_team_id: teamId },
+    });
+    assert.deepEqual(current.calls.find((call) => call.name === "list_my_team_athlete_workout_feedback"), {
+      kind: "rpc",
+      name: "list_my_team_athlete_workout_feedback",
+      payload: { p_team_id: teamId, p_athlete_id: athleteId },
     });
     const sessionRead = current.calls.find((call) => call.table === "training_sessions");
     assert.deepEqual(sessionRead.filters, [["team_id", teamId], ["athlete_id", athleteId]]);
