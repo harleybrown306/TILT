@@ -3,6 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import WorkoutPlayer from "@/components/workout/workout-player";
 import CompletedWorkoutDelivery from "@/components/workout/completed-workout-delivery";
+import WorkoutFeedback from "@/components/workout/workout-feedback";
 import { mapSessionPrescription, type SessionPrescriptionRow } from "@/lib/training-session-prescription";
 
 type PageProps = {
@@ -324,6 +325,7 @@ export default async function TrainingSessionPage({
       <h2 className="text-2xl font-semibold text-emerald-400">Workout completed</h2>
       <p className="mt-3 text-slate-300">This training session is complete.</p>
       {!canActForTraining && <p className="mt-3 text-slate-400">Read-only workout view.</p>}
+      {results?.[0]?.id && <WorkoutFeedback resultId={results[0].id} />}
     </div>
   ) : !canActForTraining ? (
     <div className="rounded-2xl border border-slate-800 bg-slate-900 p-8">
