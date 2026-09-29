@@ -16,6 +16,7 @@ type WorkoutPlayerProps = {
   athleteId: string;
   workoutId: string;
   steps: WorkoutStep[];
+  familiarExerciseIds?: string[] | null;
 };
 
 function formatClock(seconds: number) {
@@ -25,7 +26,7 @@ function formatClock(seconds: number) {
   return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
-export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, athleteId, workoutId, steps: prescribedSteps }: WorkoutPlayerProps) {
+export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, athleteId, workoutId, steps: prescribedSteps, familiarExerciseIds = null }: WorkoutPlayerProps) {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const audio = useWorkoutAudio();
@@ -215,6 +216,8 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
             ? "Rest"
             : currentStep.exerciseName}
         </h2>
+
+        {phase === "work" && familiarExerciseIds !== null && !familiarExerciseIds.includes(currentStep.exerciseId) && <p className="mt-2 text-sm font-semibold tracking-wide text-emerald-300" aria-label="New exercise">NEW</p>}
 
         {phase === "work" && currentStep.offHand && (
           <p className="mt-2 font-semibold text-emerald-400">

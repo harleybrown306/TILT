@@ -12,7 +12,7 @@ function load(path, mocks = {}) {
   new vm.Script(`(function(require,module,exports){${code}\n})`).runInThisContext()((name) => name in mocks ? mocks[name] : require(name), loaded, loaded.exports);
   return loaded.exports;
 }
-const step = (id, name, videoUrl) => ({ id, position: id === "one" ? 0 : 1, exerciseName: name, durationSeconds: 20, restSeconds: 5, offHand: false, notes: null, videoUrl });
+const step = (id, name, videoUrl, exerciseId = `semantic-${id}`) => ({ id, exerciseId, position: id === "one" ? 0 : 1, exerciseName: name, durationSeconds: 20, restSeconds: 5, offHand: false, notes: null, videoUrl });
 function findAll(tree, predicate, found = []) {
   if (!tree || typeof tree !== "object") return found;
   if (predicate(tree)) found.push(tree);
@@ -30,7 +30,7 @@ function previewHarness() {
   const video = () => null;
   const preview = load("src/components/workout/workout-preview.tsx", { react: fakeReact, "./exercise-video": { default: video, safeVideoUrl: (url) => typeof url === "string" && url.startsWith("https://") ? url : null } });
   const mountRefs = (tree) => findAll(tree, (node) => typeof node.props?.ref === "function").forEach((node) => node.props.ref({ focus: () => focuses.push(node.props["aria-label"] ?? "close") }));
-  return { video, focuses, render: (steps) => { cursor = 0; effects.length = 0; const tree = preview.default({ steps }); mountRefs(tree); return tree; }, commit: () => effects.splice(0).forEach((effect) => effect()) };
+  return { video, focuses, render: (steps, familiarExerciseIds = null) => { cursor = 0; effects.length = 0; const tree = preview.default({ steps, familiarExerciseIds }); mountRefs(tree); return tree; }, commit: () => effects.splice(0).forEach((effect) => effect()) };
 }
 test("preview exposes only safe row demos and replaces the selected demo without workout actions", () => {
   const h = previewHarness(); const steps = [step("one", "Frozen Cradle", "https://example.com/one.mp4"), step("two", "Frozen Switch", "https://example.com/two.mp4"), step("three", "No Demo", null), step("four", "Unsafe", "javascript:bad")];
@@ -58,4 +58,10 @@ test("preview moves focus to the opened demo close control and restores its stab
   views[0].props.onClick(); tree = h.render(steps); h.commit(); assert.equal(h.focuses.at(-1), "Close demo for Repeat");
   findAll(tree, (node) => node.props?.["aria-label"] === "Close demo for Repeat")[0].props.onClick(); tree = h.render(steps); h.commit(); assert.equal(h.focuses.at(-1), "View demo for Repeat");
   findAll(tree, (node) => node.props?.["aria-label"] === "View demo for Repeat")[1].props.onClick(); tree = h.render(steps); h.commit(); assert.equal(h.focuses.at(-1), "Close demo for Repeat");
+});
+test("preview marks only known-unfamiliar semantic exercises NEW", () => {
+  const h = previewHarness(); const repeated = [step("one", "Repeat", null, "semantic-repeat"), step("two", "Repeat", null, "semantic-repeat")];
+  let tree = h.render(repeated, []); assert.equal(findAll(tree, node => node.props?.["aria-label"] === "New exercise").length, 2);
+  tree = h.render(repeated, ["semantic-repeat"]); assert.equal(findAll(tree, node => node.props?.["aria-label"] === "New exercise").length, 0);
+  tree = h.render(repeated, null); assert.equal(findAll(tree, node => node.props?.["aria-label"] === "New exercise").length, 0);
 });

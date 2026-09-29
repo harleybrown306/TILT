@@ -8,7 +8,7 @@ export function mapSessionPrescription(row: SessionPrescriptionRow, videoByStepI
   const steps = row.steps.map((value) => {
     const s = value as Partial<SnapshotStepV1>;
     if (!uuid(s.workout_exercise_id) || !uuid(s.exercise_id) || typeof s.exercise_name !== "string" || !s.exercise_name.trim() || !Number.isInteger(s.position) || s.position! < 0 || !Number.isInteger(s.work_ms) || s.work_ms! < 0 || !Number.isInteger(s.rest_ms) || s.rest_ms! < 0 || typeof s.off_hand !== "boolean" || !(s.notes === null || typeof s.notes === "string")) throw new Error("Unsupported or invalid training prescription.");
-    return { id:s.workout_exercise_id, position:s.position!, exerciseName:s.exercise_name, durationSeconds:s.work_ms!/1000, restSeconds:s.rest_ms!/1000, offHand:s.off_hand, notes:s.notes, videoUrl:videoByStepId.get(s.workout_exercise_id) ?? null };
+    return { id:s.workout_exercise_id, exerciseId:s.exercise_id, position:s.position!, exerciseName:s.exercise_name, durationSeconds:s.work_ms!/1000, restSeconds:s.rest_ms!/1000, offHand:s.off_hand, notes:s.notes, videoUrl:videoByStepId.get(s.workout_exercise_id) ?? null };
   });
   const work = steps.reduce((n,s)=>n+s.durationSeconds*1000,0), rest=steps.reduce((n,s)=>n+s.restSeconds*1000,0);
   if (work !== row.prescribed_work_ms || rest !== row.prescribed_rest_ms || work+rest !== row.prescribed_total_ms) throw new Error("Training prescription totals are invalid.");

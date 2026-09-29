@@ -1,7 +1,7 @@
 import type { WorkoutSessionEvent } from "./workout-session-events";
 
 export type WorkoutStep = {
-  id: string; position: number; exerciseName: string; durationSeconds: number;
+  id: string; exerciseId: string; position: number; exerciseName: string; durationSeconds: number;
   restSeconds: number; offHand: boolean; notes: string | null; videoUrl: string | null;
 };
 export type Checkpoint = {

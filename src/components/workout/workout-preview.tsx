@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { WorkoutStep } from "@/lib/workout-session-state";
 import ExerciseVideo, { safeVideoUrl } from "./exercise-video";
 
-export default function WorkoutPreview({ steps }: { steps: WorkoutStep[] }) {
+export default function WorkoutPreview({ steps, familiarExerciseIds = null }: { steps: WorkoutStep[]; familiarExerciseIds?: string[] | null }) {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const demoTriggers = useRef(new Map<string, HTMLButtonElement>());
   const demoCloses = useRef(new Map<string, HTMLButtonElement>());
@@ -48,7 +48,7 @@ export default function WorkoutPreview({ steps }: { steps: WorkoutStep[] }) {
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-500 font-bold text-slate-950">{index + 1}</div>
             <div className="min-w-0 flex-1">
               <div className="flex flex-col justify-between gap-3 sm:flex-row">
-                <div><h3 className="text-lg font-semibold">{step.exerciseName}</h3>{step.offHand && <p className="mt-1 text-sm font-medium text-emerald-400">Off hand</p>}</div>
+                <div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold">{step.exerciseName}</h3>{familiarExerciseIds !== null && !familiarExerciseIds.includes(step.exerciseId) && <span className="rounded-full border border-emerald-400/50 px-2 py-0.5 text-xs font-semibold tracking-wide text-emerald-300" aria-label="New exercise">NEW</span>}</div>{step.offHand && <p className="mt-1 text-sm font-medium text-emerald-400">Off hand</p>}</div>
                 <div className="flex gap-5 text-sm"><div><p className="text-slate-500">Work</p><p className="mt-1 font-medium">{formatTime(step.durationSeconds)}</p></div><div><p className="text-slate-500">Rest</p><p className="mt-1 font-medium">{formatTime(step.restSeconds)}</p></div></div>
               </div>
               {step.notes && <p className="mt-3 text-sm text-slate-400">{step.notes}</p>}

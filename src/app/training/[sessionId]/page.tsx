@@ -6,6 +6,7 @@ import CompletedWorkoutDelivery from "@/components/workout/completed-workout-del
 import WorkoutFeedback from "@/components/workout/workout-feedback";
 import WorkoutPreview from "@/components/workout/workout-preview";
 import { mapSessionPrescription, type SessionPrescriptionRow } from "@/lib/training-session-prescription";
+import { loadFamiliarExerciseIds } from "@/lib/athlete-exercise-familiarity-server";
 
 type PageProps = {
   params: Promise<{
@@ -172,6 +173,9 @@ export default async function TrainingSessionPage({
     prescribed = prescriptionError || !prescription ? null : mapSessionPrescription(prescription as SessionPrescriptionRow, videos);
   } catch { prescribed = null; }
   const workoutSteps = prescribed?.steps ?? [];
+  const familiarExerciseIds = session.athlete_id && prescribed
+    ? await loadFamiliarExerciseIds(supabase as never, session.athlete_id, workoutSteps.map((step) => step.exerciseId))
+    : null;
 
   return (
     <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
@@ -216,7 +220,7 @@ export default async function TrainingSessionPage({
           )}
         </header>
 
-        <WorkoutPreview steps={workoutSteps} />
+        <WorkoutPreview steps={workoutSteps} familiarExerciseIds={familiarExerciseIds} />
 
         <div className="border-t border-slate-800 pt-8">
   {canActForTraining && session.athlete_id && isCompleted && !resultError && <CompletedWorkoutDelivery actorUserId={user.id} athleteId={session.athlete_id} sessionId={session.id} resultExists={Boolean(results?.length)} />}
@@ -242,6 +246,7 @@ export default async function TrainingSessionPage({
   workoutId={prescription?.workout_id ?? session.workout_id}
   sessionId={session.id}
   steps={workoutSteps}
+  familiarExerciseIds={familiarExerciseIds}
   />
   )}
 </div>
