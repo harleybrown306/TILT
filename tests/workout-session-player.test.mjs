@@ -91,12 +91,95 @@ function findButton(tree, label) {
  const children=tree.props?.children;
  for(const child of Array.isArray(children)?children:[children]) {const found=findButton(child,label);if(found)return found;}return null;
 }
+function findNode(tree, predicate) {
+ if(!tree||typeof tree!=="object")return null;
+ if(predicate(tree))return tree;
+ const children=tree.props?.children;
+ for(const child of Array.isArray(children)?children:[children]) {const found=findNode(child,predicate);if(found)return found;}
+ return null;
+}
+function playerHarness(options={}) {
+ const steps=options.steps??[
+  step({id:id(610),exerciseName:"First",videoUrl:"https://example.com/first.mp4"}),
+  step({id:id(611),position:1,exerciseName:"Second",videoUrl:"https://example.com/second.mp4",restSeconds:0}),
+ ];
+ const checkpointFor=({phase="work",index=0,paused=false}={})=>{
+  const cp=begin({steps}).checkpoint;
+  return {...cp,steps,phase,index,pausedAt:paused?start+1:null,logicalNow:start+1};
+ };
+ let checkpoint=options.checkpoint??checkpointFor(options),slot=0,tree;
+ const values=[],refs=[],effects=[],calls=[];
+ const fakeReact={...React,
+  useMemo:fn=>fn(),
+  useRef:value=>{const current=slot++;return refs[current]??(refs[current]={current:value});},
+  useState:value=>{const current=slot++;if(!(current in values))values[current]=typeof value==="function"?value():value;return [values[current],next=>{values[current]=typeof next==="function"?next(values[current]):next;}];},
+  useEffect:fn=>effects.push(fn),
+ };
+ const player=load("src/components/workout/workout-player.tsx",{
+  react:fakeReact,"next/navigation":{useRouter:()=>({push:()=>{},refresh:()=>{}})},
+  "@/lib/supabase/client":{createClient:()=>({})},"@/lib/complete-training-session":{completeTrainingSession:async()=>({})},"@/lib/workout-session-state":state,
+  "./use-workout-session":{useWorkoutSession:()=>({checkpoint,ready:true,warning:"",run:async(command,expected)=>{calls.push({command,expected});},flush:async()=>{},finalizeAttempt:async()=>{}})},
+  "./exercise-video":{safeVideoUrl:video.safeVideoUrl,default:({url})=>React.createElement("div",{"data-demo-url":url},url)},
+  "./use-workout-audio":{useWorkoutAudio:()=>({soundEnabled:false,unlock:()=>{},setEnabled:()=>{},handleTransition:()=>{}})},
+ });
+ const render=()=>{slot=0;effects.length=0;tree=player.default({...input,steps});return tree;};
+ const settle=async()=>{effects.splice(0).forEach(effect=>effect());await Promise.resolve();render();effects.splice(0).forEach(effect=>effect());await Promise.resolve();render();};
+ render();
+ return {calls,checkpointFor,render,settle,update:next=>{checkpoint=next;render();},button:label=>findButton(tree,label),review:()=>findNode(tree,node=>node.props?.["aria-label"]?.startsWith("Review demo for ")),panel:()=>findNode(tree,node=>node.props?.["aria-label"]?.startsWith("Demo for ")),demoUrl:()=>findNode(tree,node=>node.props?.url)?.props.url};
+}
+test("review demo running work waits for matching canonical pause then targets current step",async()=>{
+ const h=playerHarness();h.review().props.onClick();assert.deepEqual(h.calls.map(call=>call.command),["pause"]);assert.equal(h.panel(),null);
+ h.update(h.checkpointFor({paused:true}));await h.settle();assert.equal(h.panel().props["aria-label"],"Demo for First");assert.equal(h.demoUrl(),"https://example.com/first.mp4");
+});
+test("review demo running rest waits for matching canonical pause then targets next step",async()=>{
+ const h=playerHarness({phase:"rest"});h.review().props.onClick();assert.deepEqual(h.calls.map(call=>call.command),["pause"]);assert.equal(h.panel(),null);
+ h.update(h.checkpointFor({phase:"rest",paused:true}));await h.settle();assert.equal(h.panel().props["aria-label"],"Demo for Second");assert.equal(h.demoUrl(),"https://example.com/second.mp4");
+});
+test("already-paused work and rest open their authoritative demos without another pause",()=>{
+ for(const [phase,name,url] of [["work","First","https://example.com/first.mp4"],["rest","Second","https://example.com/second.mp4"]]){
+  const h=playerHarness({phase,paused:true});h.review().props.onClick();h.render();assert.equal(h.calls.length,0);assert.equal(h.panel().props["aria-label"],`Demo for ${name}`);assert.equal(h.demoUrl(),url);
+ }
+});
+test("review close remains paused and explicit resume is the only resume action",async()=>{
+ const h=playerHarness({paused:true});h.review().props.onClick();h.render();h.button("Close demo").props.onClick();h.render();assert.equal(h.panel(),null);assert.equal(h.calls.length,0);assert.equal(h.button("Resume").props.disabled,false);h.button("Resume").props.onClick();assert.deepEqual(h.calls.map(call=>call.command),["resume"]);
+});
+test("rapid double review makes one pause request and one confirmed panel",async()=>{
+ const h=playerHarness();const sameRenderedHandler=h.review().props.onClick;sameRenderedHandler();sameRenderedHandler();assert.deepEqual(h.calls.map(call=>call.command),["pause"]);h.update(h.checkpointFor({paused:true}));await h.settle();assert.ok(h.panel());
+});
+test("stale work and rest review requests never open after authoritative context changes",async()=>{
+ for(const [requested,next] of [[{phase:"work",index:0},{phase:"rest",index:0}],[{phase:"rest",index:0},{phase:"work",index:1}]]){
+  const h=playerHarness(requested);h.review().props.onClick();h.update(h.checkpointFor({...next,paused:true}));await h.settle();assert.equal(h.panel(),null);
+ }
+});
+test("open review clears on context change and completion wins",async()=>{
+ const h=playerHarness({paused:true});h.review().props.onClick();h.render();assert.ok(h.panel());h.update(h.checkpointFor({phase:"rest",paused:true}));await h.settle();assert.equal(h.panel(),null);
+ h.update(h.checkpointFor({phase:"finished"}));await h.settle();assert.equal(h.panel(),null);assert.ok(findNode(h.render(),node=>node.props?.children==="Workout complete"));
+});
+test("review demo eligibility uses stable steps, including repeated names",()=>{
+ const repeated=[step({id:id(620),exerciseName:"Repeat",videoUrl:"https://example.com/a.mp4"}),step({id:id(621),position:1,exerciseName:"Repeat",videoUrl:"https://example.com/b.mp4",restSeconds:0})];
+ const work=playerHarness({steps:repeated,index:1,paused:true});work.review().props.onClick();work.render();assert.equal(work.demoUrl(),"https://example.com/b.mp4");
+ const finalRest=playerHarness({steps:repeated,phase:"rest",index:1});assert.equal(finalRest.review(),null);
+ for(const url of [null,"http://example.com/demo.mp4","not a URL"]){const h=playerHarness({steps:[step({videoUrl:url})]});assert.equal(h.review(),null);}
+ assert.ok(playerHarness().review());
+});
+function reviewVideoHarness(url="https://example.com/demo.mp4") {
+ const values=[];let slot=0;
+ const fakeReact={useRef:()=>({current:null}),useEffect:fn=>fn(),useState:value=>{const current=slot++;if(!(current in values))values[current]=value;return [values[current],next=>{values[current]=next;}];}};
+ const component=load("src/components/workout/exercise-video.tsx",{react:fakeReact});
+ const render=()=>{slot=0;return component.default({url});};
+ return {render};
+}
+test("review media failure uses the real adapter error path without resuming the paused player",()=>{
+ const player=playerHarness({paused:true});player.review().props.onClick();player.render();assert.ok(player.panel());
+ const media=reviewVideoHarness();const before=media.render();findNode(before,node=>node.type==="video").props.onError();const after=media.render();assert.ok(findNode(after,node=>node.props?.role==="status"));
+ player.button("Close demo").props.onClick();player.render();assert.equal(player.calls.length,0);assert.equal(player.button("Resume").props.disabled,false);
+});
 function completionSetup(options={}) {
  const cp=command(begin().checkpoint,"recover",35000).checkpoint;const calls=[];let rpcCalls=0;
  const client={auth:{getUser:async()=>({data:{user:{id:options.wrongUser?id(999):input.actorUserId}},error:null})},from(){
   const q={select(){return q;},eq(){return q;},single(){return q;},limit(){return q;},then(resolve){return Promise.resolve({data:[],error:null}).then(resolve);}};return q;
  },rpc:async(name,args)=>{rpcCalls++;calls.push({type:"result",name,args});if(options.rpcFailure)return {data:null,error:{message:"denied"}};return {data:[{result_id:id(800),already_completed:Boolean(options.completed)}],error:null}}};
- const fakeReact={...React,useMemo:fn=>fn(),useState:v=>[typeof v==="function"?v():v,()=>{}],useRef:v=>({current:v})};
+ const fakeReact={...React,useMemo:fn=>fn(),useState:v=>[typeof v==="function"?v():v,()=>{}],useRef:v=>({current:v}),useEffect:()=>{}};
  const player=load("src/components/workout/workout-player.tsx",{
   react:fakeReact,"next/navigation":{useRouter:()=>({push:path=>calls.push({type:"navigate",path}),refresh:()=>{}})},
   "@/lib/supabase/client":{createClient:()=>client},"@/lib/complete-training-session":{completeTrainingSession:async(client,sessionId)=>{const response=await client.rpc("complete_my_training_session",{p_session_id:sessionId});if(response.error)throw Error("Unable to save workout. Retry safely.");return {resultId:response.data[0].result_id,alreadyCompleted:response.data[0].already_completed};}},"@/lib/workout-session-state":state,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { completeTrainingSession } from "@/lib/complete-training-session";
@@ -33,7 +33,10 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
   const { checkpoint, ready, warning, run, flush, finalizeAttempt } = useWorkoutSession(input, { onStateTransition: audio.handleTransition });
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
+  const [pendingReview, setPendingReview] = useState<{ phase: "work" | "rest"; index: number; stepId: string } | null>(null);
+  const [openReview, setOpenReview] = useState<{ stepId: string; name: string; url: string } | null>(null);
   const savingRef = useRef(false);
+  const reviewRequestClaim = useRef(false);
   const steps = checkpoint?.steps ?? prescribedSteps;
   const phase = checkpoint?.phase ?? "ready";
   const currentStepIndex = checkpoint?.index ?? 0;
@@ -42,9 +45,38 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
   const timeRemaining = checkpoint ? Math.ceil(remainingMs(checkpoint, checkpoint.logicalNow) / 1000) : 0;
   const nextVideoUrl = safeVideoUrl(steps[currentStepIndex + 1]?.videoUrl);
   const expected = { index: currentStepIndex, phase, paused: isPaused };
+  const reviewIndex = phase === "work" ? currentStepIndex : phase === "rest" ? currentStepIndex + 1 : -1;
+  const reviewStep = reviewIndex >= 0 ? steps[reviewIndex] : undefined;
+  const reviewUrl = safeVideoUrl(reviewStep?.videoUrl);
   const storageWarning = warning ? <p role="status" className="mb-4 text-sm text-amber-300">{warning}</p> : null;
   function startWorkout() { audio.unlock(); void run("begin"); }
   function skipPhase() { void run("skip", expected); }
+  function requestReview() {
+    if (!reviewStep || !reviewUrl || reviewRequestClaim.current || pendingReview || openReview || (phase !== "work" && phase !== "rest")) return;
+    const request = { phase, index: currentStepIndex, stepId: reviewStep.id } as const;
+    if (isPaused) { setOpenReview({ stepId: reviewStep.id, name: reviewStep.exerciseName, url: reviewUrl }); return; }
+    reviewRequestClaim.current = true; setPendingReview(request);
+    void run("pause", expected).catch(() => {
+      reviewRequestClaim.current = false;
+      setPendingReview((current) => current === request ? null : current);
+    });
+  }
+  useEffect(() => {
+    if (!pendingReview || !checkpoint) return;
+    queueMicrotask(() => {
+      if (checkpoint.phase !== pendingReview.phase || checkpoint.index !== pendingReview.index) { reviewRequestClaim.current = false; setPendingReview(null); return; }
+      if (checkpoint.pausedAt === null) return;
+      const targetIndex = checkpoint.phase === "work" ? checkpoint.index : checkpoint.index + 1;
+      const target = checkpoint.steps[targetIndex]; const url = safeVideoUrl(target?.videoUrl);
+      if (!target || target.id !== pendingReview.stepId || !url) { reviewRequestClaim.current = false; setPendingReview(null); return; }
+      setOpenReview({ stepId: target.id, name: target.exerciseName, url }); reviewRequestClaim.current = false; setPendingReview(null);
+    });
+  }, [checkpoint, pendingReview]);
+  useEffect(() => {
+    if (!openReview || !checkpoint || checkpoint.phase === "finished") { if (openReview && checkpoint?.phase === "finished") queueMicrotask(() => setOpenReview(null)); return; }
+    const targetIndex = checkpoint.phase === "work" ? checkpoint.index : checkpoint.phase === "rest" ? checkpoint.index + 1 : -1;
+    if (targetIndex < 0 || checkpoint.steps[targetIndex]?.id !== openReview.stepId) queueMicrotask(() => setOpenReview(null));
+  }, [checkpoint, openReview]);
 
   async function finishWorkout() {
     if (savingRef.current || !checkpoint || checkpoint.finalized) return;
@@ -156,6 +188,18 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
         </button>
       </div>
 
+      {openReview ? (
+        <section className="mt-6 rounded-xl border border-slate-700 p-4" aria-label={`Demo for ${openReview.name}`}>
+          <p className="font-semibold">Review demo: {openReview.name}</p>
+          <ExerciseVideo url={openReview.url} />
+          <button type="button" onClick={() => setOpenReview(null)} className="mt-4 rounded-lg border border-slate-700 px-4 py-2 font-semibold">Close demo</button>
+        </section>
+      ) : (
+        <div className="mt-4 flex justify-end">
+          {reviewStep && reviewUrl && <button type="button" onClick={requestReview} disabled={Boolean(pendingReview)} aria-label={`Review demo for ${reviewStep.exerciseName}`} className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 disabled:opacity-60">Review demo</button>}
+        </div>
+      )}
+
       <div className="py-10 text-center">
         <h2 className="text-3xl font-bold">
           {phase === "rest"
@@ -202,6 +246,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
         <button
           type="button"
           onClick={() => void run(isPaused ? "resume" : "pause", expected)}
+          disabled={Boolean(openReview)}
           className="rounded-xl border border-slate-700 px-6 py-4 font-semibold transition hover:bg-slate-800"
         >
           {isPaused ? "Resume" : "Pause"}
