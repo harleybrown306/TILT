@@ -14,9 +14,16 @@ const tones: Record<WorkoutAudioCueKind, { frequency: number; duration: number }
 
 export function useWorkoutAudio() {
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const [audioAvailability, setAudioAvailability] = useState<"unknown" | "available" | "unavailable">("unknown");
   const enabled = useRef(false);
   const context = useRef<AudioContext | null>(null);
   const emitted = useRef(new Set<string>());
+  const mounted = useRef(true);
+  const unlockGeneration = useRef(0);
+
+  const setAvailability = useCallback((generation: number, value: "available" | "unavailable") => {
+    if (mounted.current && unlockGeneration.current === generation) setAudioAvailability(value);
+  }, []);
 
   const cancelSpeech = useCallback(() => {
     try { window.speechSynthesis?.cancel(); } catch {
@@ -25,22 +32,30 @@ export function useWorkoutAudio() {
   }, []);
 
   const unlock = useCallback(() => {
+    const generation = ++unlockGeneration.current;
     enabled.current = true;
     setSoundEnabled(true);
     try {
       const AudioContextConstructor = window.AudioContext ?? (window as AudioWindow).webkitAudioContext;
-      if (!AudioContextConstructor) return;
+      if (!AudioContextConstructor) { setAvailability(generation, "unavailable"); return; }
       if (!context.current || context.current.state === "closed") context.current = new AudioContextConstructor();
-      if (context.current.state === "suspended") void context.current.resume().catch(() => {});
+      const audio = context.current;
+      if (audio.state === "running") { setAvailability(generation, "available"); return; }
+      if (audio.state !== "suspended") { setAvailability(generation, "unavailable"); return; }
+      void audio.resume().then(() => {
+        if (audio.state === "running") setAvailability(generation, "available");
+        else setAvailability(generation, "unavailable");
+      }).catch(() => setAvailability(generation, "unavailable"));
     } catch {
       // Audio is optional; browser capability errors must not affect training.
+      setAvailability(generation, "unavailable");
     }
-  }, []);
+  }, [setAvailability]);
 
   const setEnabled = useCallback((value: boolean) => {
     enabled.current = value;
     setSoundEnabled(value);
-    if (!value) cancelSpeech();
+    if (!value) { ++unlockGeneration.current; cancelSpeech(); }
     if (value) unlock();
   }, [unlock, cancelSpeech]);
 
@@ -95,11 +110,12 @@ export function useWorkoutAudio() {
   }, [play, speak, cancelSpeech]);
 
   useEffect(() => () => {
+    mounted.current = false;
     cancelSpeech();
     const audio = context.current;
     context.current = null;
     if (audio && audio.state !== "closed") void audio.close().catch(() => {});
   }, [cancelSpeech]);
 
-  return { soundEnabled, unlock, setEnabled, handleTransition };
+  return { soundEnabled, audioAvailability, unlock, setEnabled, handleTransition };
 }

@@ -21,7 +21,7 @@ function findAll(tree, predicate, found = []) {
   return found;
 }
 function previewHarness() {
-  const values = [], refs = [], effects = []; let cursor = 0;
+  const values = [], refs = [], effects = [], focuses = []; let cursor = 0;
   const fakeReact = {
     useState: (value) => { const i = cursor++; if (!(i in values)) values[i] = value; return [values[i], (next) => { values[i] = typeof next === "function" ? next(values[i]) : next; }]; },
     useRef: (value) => { const i = cursor++; if (!refs[i]) refs[i] = { current: value }; return refs[i]; },
@@ -29,7 +29,8 @@ function previewHarness() {
   };
   const video = () => null;
   const preview = load("src/components/workout/workout-preview.tsx", { react: fakeReact, "./exercise-video": { default: video, safeVideoUrl: (url) => typeof url === "string" && url.startsWith("https://") ? url : null } });
-  return { video, render: (steps) => { cursor = 0; effects.length = 0; return preview.default({ steps }); } };
+  const mountRefs = (tree) => findAll(tree, (node) => typeof node.props?.ref === "function").forEach((node) => node.props.ref({ focus: () => focuses.push(node.props["aria-label"] ?? "close") }));
+  return { video, focuses, render: (steps) => { cursor = 0; effects.length = 0; const tree = preview.default({ steps }); mountRefs(tree); return tree; }, commit: () => effects.splice(0).forEach((effect) => effect()) };
 }
 test("preview exposes only safe row demos and replaces the selected demo without workout actions", () => {
   const h = previewHarness(); const steps = [step("one", "Frozen Cradle", "https://example.com/one.mp4"), step("two", "Frozen Switch", "https://example.com/two.mp4"), step("three", "No Demo", null), step("four", "Unsafe", "javascript:bad")];
@@ -50,4 +51,11 @@ test("exercise video renders a factual fallback after media error", () => {
   const render = () => { cursor = 0; return video.default({ url: "https://example.com/demo.mp4" }); };
   let tree = render(); findAll(tree, (node) => node.type === "video")[0].props.onError(); tree = render();
   assert.equal(tree.props.children, "Demo unavailable");
+});
+test("preview moves focus to the opened demo close control and restores its stable trigger", () => {
+  const h = previewHarness(); const steps = [step("one", "Repeat", "https://example.com/one.mp4"), step("two", "Repeat", "https://example.com/two.mp4")];
+  let tree = h.render(steps); const views = findAll(tree, (node) => node.type === "button" && String(node.props["aria-label"] ?? "").startsWith("View demo"));
+  views[0].props.onClick(); tree = h.render(steps); h.commit(); assert.equal(h.focuses.at(-1), "Close demo for Repeat");
+  findAll(tree, (node) => node.props?.["aria-label"] === "Close demo for Repeat")[0].props.onClick(); tree = h.render(steps); h.commit(); assert.equal(h.focuses.at(-1), "View demo for Repeat");
+  findAll(tree, (node) => node.props?.["aria-label"] === "View demo for Repeat")[1].props.onClick(); tree = h.render(steps); h.commit(); assert.equal(h.focuses.at(-1), "Close demo for Repeat");
 });

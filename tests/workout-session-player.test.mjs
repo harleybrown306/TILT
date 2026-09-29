@@ -108,7 +108,7 @@ function playerHarness(options={}) {
   return {...cp,steps,phase,index,pausedAt:paused?start+1:null,logicalNow:start+1};
  };
  let checkpoint=options.checkpoint??checkpointFor(options),slot=0,tree;
- const values=[],refs=[],effects=[],calls=[];
+ const values=[],refs=[],effects=[],calls=[],focuses=[];
  const fakeReact={...React,
   useMemo:fn=>fn(),
   useRef:value=>{const current=slot++;return refs[current]??(refs[current]={current:value});},
@@ -120,12 +120,13 @@ function playerHarness(options={}) {
   "@/lib/supabase/client":{createClient:()=>({})},"@/lib/complete-training-session":{completeTrainingSession:async()=>({})},"@/lib/workout-session-state":state,
   "./use-workout-session":{useWorkoutSession:()=>({checkpoint,ready:true,warning:"",run:async(command,expected)=>{calls.push({command,expected});},flush:async()=>{},finalizeAttempt:async()=>{}})},
   "./exercise-video":{safeVideoUrl:video.safeVideoUrl,default:({url})=>React.createElement("div",{"data-demo-url":url},url)},
-  "./use-workout-audio":{useWorkoutAudio:()=>({soundEnabled:false,unlock:()=>{},setEnabled:()=>{},handleTransition:()=>{}})},
+  "./use-workout-audio":{useWorkoutAudio:()=>({soundEnabled:Boolean(options.soundEnabled),audioAvailability:options.audioAvailability??"unknown",unlock:()=>{},setEnabled:()=>{},handleTransition:()=>{}})},
  });
- const render=()=>{slot=0;effects.length=0;tree=player.default({...input,steps});return tree;};
+ const bindRefs=tree=>{if(!tree||typeof tree!=="object")return;const label=tree.props?.["aria-label"]??tree.props?.children;const target={focus:()=>focuses.push(label)};if(typeof tree.props?.ref==="function")tree.props.ref(target);if(String(label).startsWith("Review demo"))refs[6].current=target;if(label==="Close demo")refs[7].current=target;const children=tree.props?.children;for(const child of Array.isArray(children)?children:[children])bindRefs(child);};
+ const render=()=>{slot=0;effects.length=0;tree=player.default({...input,steps});bindRefs(tree);return tree;};
  const settle=async()=>{effects.splice(0).forEach(effect=>effect());await Promise.resolve();render();effects.splice(0).forEach(effect=>effect());await Promise.resolve();render();};
  render();
- return {calls,checkpointFor,render,settle,update:next=>{checkpoint=next;render();},button:label=>findButton(tree,label),review:()=>findNode(tree,node=>node.props?.["aria-label"]?.startsWith("Review demo for ")),panel:()=>findNode(tree,node=>node.props?.["aria-label"]?.startsWith("Demo for ")),demoUrl:()=>findNode(tree,node=>node.props?.url)?.props.url};
+ return {calls,focuses,checkpointFor,render,settle,update:next=>{checkpoint=next;render();},button:label=>findButton(tree,label),review:()=>findNode(tree,node=>node.props?.["aria-label"]?.startsWith("Review demo for ")),panel:()=>findNode(tree,node=>node.props?.["aria-label"]?.startsWith("Demo for ")),demoUrl:()=>findNode(tree,node=>node.props?.url)?.props.url};
 }
 test("review demo running work waits for matching canonical pause then targets current step",async()=>{
  const h=playerHarness();h.review().props.onClick();assert.deepEqual(h.calls.map(call=>call.command),["pause"]);assert.equal(h.panel(),null);
@@ -142,6 +143,9 @@ test("already-paused work and rest open their authoritative demos without anothe
 });
 test("review close remains paused and explicit resume is the only resume action",async()=>{
  const h=playerHarness({paused:true});h.review().props.onClick();h.render();h.button("Close demo").props.onClick();h.render();assert.equal(h.panel(),null);assert.equal(h.calls.length,0);assert.equal(h.button("Resume").props.disabled,false);h.button("Resume").props.onClick();assert.deepEqual(h.calls.map(call=>call.command),["resume"]);
+});
+test("review focus moves to Close after confirmation and returns to Review Demo only on ordinary close",async()=>{
+ const h=playerHarness();h.review().props.onClick();assert.equal(h.focuses.length,0);h.update(h.checkpointFor({paused:true}));await h.settle();assert.equal(h.focuses.at(-1),"Close demo");h.button("Close demo").props.onClick();h.render();await h.settle();assert.match(String(h.focuses.at(-1)),/Review demo for First/);
 });
 test("rapid double review makes one pause request and one confirmed panel",async()=>{
  const h=playerHarness();const sameRenderedHandler=h.review().props.onClick;sameRenderedHandler();sameRenderedHandler();assert.deepEqual(h.calls.map(call=>call.command),["pause"]);h.update(h.checkpointFor({paused:true}));await h.settle();assert.ok(h.panel());
@@ -173,6 +177,9 @@ test("review media failure uses the real adapter error path without resuming the
  const player=playerHarness({paused:true});player.review().props.onClick();player.render();assert.ok(player.panel());
  const media=reviewVideoHarness();const before=media.render();findNode(before,node=>node.type==="video").props.onError();const after=media.render();assert.ok(findNode(after,node=>node.props?.role==="status"));
  player.button("Close demo").props.onClick();player.render();assert.equal(player.calls.length,0);assert.equal(player.button("Resume").props.disabled,false);
+});
+test("requested sound truthfully reports unavailable Web Audio without affecting player controls",()=>{
+ const h=playerHarness({soundEnabled:true,audioAvailability:"unavailable"});assert.ok(findNode(h.render(),node=>node.props?.role==="status"&&node.props.children==="Sound unavailable"));assert.ok(h.button("Pause"));
 });
 function completionSetup(options={}) {
  const cp=command(begin().checkpoint,"recover",35000).checkpoint;const calls=[];let rpcCalls=0;

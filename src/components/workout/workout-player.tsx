@@ -37,6 +37,10 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
   const [openReview, setOpenReview] = useState<{ stepId: string; name: string; url: string } | null>(null);
   const savingRef = useRef(false);
   const reviewRequestClaim = useRef(false);
+  const reviewTrigger = useRef<HTMLButtonElement | null>(null);
+  const reviewClose = useRef<HTMLButtonElement | null>(null);
+  const focusReviewClose = useRef(false);
+  const restoreReviewTrigger = useRef(false);
   const steps = checkpoint?.steps ?? prescribedSteps;
   const phase = checkpoint?.phase ?? "ready";
   const currentStepIndex = checkpoint?.index ?? 0;
@@ -54,7 +58,7 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
   function requestReview() {
     if (!reviewStep || !reviewUrl || reviewRequestClaim.current || pendingReview || openReview || (phase !== "work" && phase !== "rest")) return;
     const request = { phase, index: currentStepIndex, stepId: reviewStep.id } as const;
-    if (isPaused) { setOpenReview({ stepId: reviewStep.id, name: reviewStep.exerciseName, url: reviewUrl }); return; }
+    if (isPaused) { focusReviewClose.current = true; setOpenReview({ stepId: reviewStep.id, name: reviewStep.exerciseName, url: reviewUrl }); return; }
     reviewRequestClaim.current = true; setPendingReview(request);
     void run("pause", expected).catch(() => {
       reviewRequestClaim.current = false;
@@ -69,9 +73,13 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
       const targetIndex = checkpoint.phase === "work" ? checkpoint.index : checkpoint.index + 1;
       const target = checkpoint.steps[targetIndex]; const url = safeVideoUrl(target?.videoUrl);
       if (!target || target.id !== pendingReview.stepId || !url) { reviewRequestClaim.current = false; setPendingReview(null); return; }
-      setOpenReview({ stepId: target.id, name: target.exerciseName, url }); reviewRequestClaim.current = false; setPendingReview(null);
+      focusReviewClose.current = true; setOpenReview({ stepId: target.id, name: target.exerciseName, url }); reviewRequestClaim.current = false; setPendingReview(null);
     });
   }, [checkpoint, pendingReview]);
+  useEffect(() => {
+    if (openReview && focusReviewClose.current) { reviewClose.current?.focus(); focusReviewClose.current = false; }
+    if (!openReview && restoreReviewTrigger.current) { reviewTrigger.current?.focus(); restoreReviewTrigger.current = false; }
+  }, [openReview]);
   useEffect(() => {
     if (!openReview || !checkpoint || checkpoint.phase === "finished") { if (openReview && checkpoint?.phase === "finished") queueMicrotask(() => setOpenReview(null)); return; }
     const targetIndex = checkpoint.phase === "work" ? checkpoint.index : checkpoint.phase === "rest" ? checkpoint.index + 1 : -1;
@@ -186,17 +194,18 @@ export default function WorkoutPlayer({ workoutName, sessionId, actorUserId, ath
         >
           Sound: {audio.soundEnabled ? "On" : "Off"}
         </button>
+        {audio.soundEnabled && audio.audioAvailability === "unavailable" && <p role="status" className="mt-2 text-right text-sm text-slate-400">Sound unavailable</p>}
       </div>
 
       {openReview ? (
         <section className="mt-6 rounded-xl border border-slate-700 p-4" aria-label={`Demo for ${openReview.name}`}>
           <p className="font-semibold">Review demo: {openReview.name}</p>
           <ExerciseVideo url={openReview.url} />
-          <button type="button" onClick={() => setOpenReview(null)} className="mt-4 rounded-lg border border-slate-700 px-4 py-2 font-semibold">Close demo</button>
+          <button ref={reviewClose} type="button" onClick={() => { restoreReviewTrigger.current = true; setOpenReview(null); }} className="mt-4 rounded-lg border border-slate-700 px-4 py-2 font-semibold">Close demo</button>
         </section>
       ) : (
         <div className="mt-4 flex justify-end">
-          {reviewStep && reviewUrl && <button type="button" onClick={requestReview} disabled={Boolean(pendingReview)} aria-label={`Review demo for ${reviewStep.exerciseName}`} className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 disabled:opacity-60">Review demo</button>}
+          {reviewStep && reviewUrl && <button ref={reviewTrigger} type="button" onClick={requestReview} disabled={Boolean(pendingReview)} aria-label={`Review demo for ${reviewStep.exerciseName}`} className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-semibold transition hover:bg-slate-800 disabled:opacity-60">Review demo</button>}
         </div>
       )}
 

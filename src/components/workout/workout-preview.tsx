@@ -7,9 +7,16 @@ import ExerciseVideo, { safeVideoUrl } from "./exercise-video";
 export default function WorkoutPreview({ steps }: { steps: WorkoutStep[] }) {
   const [selectedStepId, setSelectedStepId] = useState<string | null>(null);
   const demoTriggers = useRef(new Map<string, HTMLButtonElement>());
+  const demoCloses = useRef(new Map<string, HTMLButtonElement>());
+  const focusAfterOpen = useRef<string | null>(null);
   const focusAfterClose = useRef<string | null>(null);
 
   useEffect(() => {
+    const openedStepId = focusAfterOpen.current;
+    if (openedStepId && selectedStepId === openedStepId) {
+      demoCloses.current.get(openedStepId)?.focus();
+      focusAfterOpen.current = null;
+    }
     const stepId = focusAfterClose.current;
     if (stepId && selectedStepId === null) {
       demoTriggers.current.get(stepId)?.focus();
@@ -20,6 +27,10 @@ export default function WorkoutPreview({ steps }: { steps: WorkoutStep[] }) {
   function closeDemo(stepId: string) {
     focusAfterClose.current = stepId;
     setSelectedStepId(null);
+  }
+  function openDemo(stepId: string) {
+    focusAfterOpen.current = stepId;
+    setSelectedStepId(stepId);
   }
 
   return <section className="py-8">
@@ -41,8 +52,8 @@ export default function WorkoutPreview({ steps }: { steps: WorkoutStep[] }) {
                 <div className="flex gap-5 text-sm"><div><p className="text-slate-500">Work</p><p className="mt-1 font-medium">{formatTime(step.durationSeconds)}</p></div><div><p className="text-slate-500">Rest</p><p className="mt-1 font-medium">{formatTime(step.restSeconds)}</p></div></div>
               </div>
               {step.notes && <p className="mt-3 text-sm text-slate-400">{step.notes}</p>}
-              {demoUrl && !isOpen && <button ref={(node) => { if (node) demoTriggers.current.set(step.id, node); else demoTriggers.current.delete(step.id); }} type="button" aria-label={`View demo for ${step.exerciseName}`} aria-expanded={false} aria-controls={panelId} onClick={() => setSelectedStepId(step.id)} className="mt-4 text-sm font-semibold text-emerald-400 hover:text-emerald-300">View demo</button>}
-              {demoUrl && isOpen && <div id={panelId} role="region" aria-label={`Demo for ${step.exerciseName}`} className="mt-4 border-t border-slate-800 pt-4"><ExerciseVideo url={demoUrl} /><button type="button" aria-label={`Close demo for ${step.exerciseName}`} onClick={() => closeDemo(step.id)} className="mt-4 text-sm font-semibold text-emerald-400 hover:text-emerald-300">Close demo</button></div>}
+              {demoUrl && !isOpen && <button ref={(node) => { if (node) demoTriggers.current.set(step.id, node); else demoTriggers.current.delete(step.id); }} type="button" aria-label={`View demo for ${step.exerciseName}`} aria-expanded={false} aria-controls={panelId} onClick={() => openDemo(step.id)} className="mt-4 text-sm font-semibold text-emerald-400 hover:text-emerald-300">View demo</button>}
+              {demoUrl && isOpen && <div id={panelId} role="region" aria-label={`Demo for ${step.exerciseName}`} className="mt-4 border-t border-slate-800 pt-4"><ExerciseVideo url={demoUrl} /><button ref={(node) => { if (node) demoCloses.current.set(step.id, node); else demoCloses.current.delete(step.id); }} type="button" aria-label={`Close demo for ${step.exerciseName}`} onClick={() => closeDemo(step.id)} className="mt-4 text-sm font-semibold text-emerald-400 hover:text-emerald-300">Close demo</button></div>}
             </div>
           </div>
         </div>;

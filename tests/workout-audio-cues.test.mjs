@@ -53,6 +53,19 @@ function audioHarness(speech = {}) {
     restore: () => { globalThis.window = oldWindow; },
   };
 }
+function audioAvailabilityHarness(windowImpl) {
+  const oldWindow = globalThis.window; const values = [], refs = [], effects = []; let slot = 0;
+  const fakeReact = {
+    useState: (value) => { const index = slot++; if (!(index in values)) values[index] = value; return [values[index], (next) => { values[index] = typeof next === "function" ? next(values[index]) : next; }]; },
+    useRef: (value) => { const index = slot++; return refs[index] ?? (refs[index] = { current: value }); },
+    useCallback: (fn) => fn, useEffect: (fn) => effects.push(fn),
+  };
+  globalThis.window = windowImpl;
+  const audio = load("src/components/workout/use-workout-audio.ts", { react: fakeReact, "@/lib/workout-audio-cues": cues }); let controller;
+  const render = () => { slot = 0; effects.length = 0; controller = audio.useWorkoutAudio(); return controller; };
+  render();
+  return { render, get: () => controller, restore: () => { globalThis.window = oldWindow; } };
+}
 
 function qualifyingRest() {
   const initial = begin().checkpoint;
@@ -265,4 +278,54 @@ test("real audio unlock failure is contained", () => {
     const audio = load("src/components/workout/use-workout-audio.ts", { react: fakeReact, "@/lib/workout-audio-cues": cues });
     assert.doesNotThrow(() => audio.useWorkoutAudio().unlock());
   } finally { globalThis.window = oldWindow; }
+});
+test("audio availability is truthful for absent, failed, successful, and retried Web Audio", async () => {
+  const absent = audioAvailabilityHarness({});
+  try { absent.get().unlock(); let current = absent.render(); assert.equal(current.soundEnabled, true); assert.equal(current.audioAvailability, "unavailable"); } finally { absent.restore(); }
+  const failed = audioAvailabilityHarness({ AudioContext: class { constructor() { throw Error("unsupported"); } } });
+  try { failed.get().unlock(); assert.equal(failed.render().audioAvailability, "unavailable"); } finally { failed.restore(); }
+  class Suspended { constructor() { this.state = "suspended"; } resume() { return Promise.reject(Error("blocked")); } close() { return Promise.resolve(); } }
+  const rejected = audioAvailabilityHarness({ AudioContext: Suspended });
+  try { rejected.get().unlock(); await Promise.resolve(); await Promise.resolve(); assert.equal(rejected.render().audioAvailability, "unavailable"); } finally { rejected.restore(); }
+  class Running { constructor() { this.state = "running"; } close() { return Promise.resolve(); } }
+  const available = audioAvailabilityHarness({ AudioContext: Running });
+  try { available.get().unlock(); assert.equal(available.render().audioAvailability, "available"); } finally { available.restore(); }
+  let fail = true; class Retry { constructor() { if (fail) throw Error("blocked"); this.state = "running"; } close() { return Promise.resolve(); } }
+  const retry = audioAvailabilityHarness({ AudioContext: Retry });
+  try { retry.get().unlock(); assert.equal(retry.render().audioAvailability, "unavailable"); retry.get().setEnabled(false); fail = false; retry.get().setEnabled(true); const current = retry.render(); assert.equal(current.soundEnabled, true); assert.equal(current.audioAvailability, "available"); } finally { retry.restore(); }
+});
+test("speech absence does not mark available Web Audio unavailable", () => {
+  class Running { constructor() { this.state = "running"; } close() { return Promise.resolve(); } }
+  const harness = audioAvailabilityHarness({ AudioContext: Running });
+  try { harness.get().unlock(); assert.equal(harness.render().audioAvailability, "available"); } finally { harness.restore(); }
+});
+test("latest Web Audio unlock attempt owns availability regardless of deferred settlement order", async () => {
+  const deferred = [], instances = [];
+  class DeferredContext {
+    constructor() { this.state = "suspended"; instances.push(this); }
+    resume() { let resolve; let reject; const promise = new Promise((ok, no) => { resolve = ok; reject = no; }); deferred.push({ resolve, reject }); return promise; }
+    close() { return Promise.resolve(); }
+  }
+  const harness = audioAvailabilityHarness({ AudioContext: DeferredContext });
+  try {
+    harness.get().unlock(); harness.get().unlock();
+    instances[0].state = "running"; deferred[1].resolve(); await Promise.resolve(); assert.equal(harness.render().audioAvailability, "available");
+    deferred[0].reject(Error("old failure")); await Promise.resolve(); await Promise.resolve(); assert.equal(harness.render().audioAvailability, "available");
+  } finally { harness.restore(); }
+});
+test("newer failed unlock remains unavailable when an older attempt later succeeds, including Sound Off invalidation", async () => {
+  const deferred = [], instances = [];
+  class DeferredContext {
+    constructor() { this.state = "suspended"; instances.push(this); }
+    resume() { let resolve; let reject; const promise = new Promise((ok, no) => { resolve = ok; reject = no; }); deferred.push({ resolve, reject }); return promise; }
+    close() { return Promise.resolve(); }
+  }
+  const harness = audioAvailabilityHarness({ AudioContext: DeferredContext });
+  try {
+    harness.get().unlock(); harness.get().unlock(); deferred[1].reject(Error("new failure")); await Promise.resolve(); await Promise.resolve(); assert.equal(harness.render().audioAvailability, "unavailable");
+    instances[0].state = "running"; deferred[0].resolve(); await Promise.resolve(); assert.equal(harness.render().audioAvailability, "unavailable");
+    instances[0].state = "suspended"; harness.get().setEnabled(false); harness.get().setEnabled(true); harness.get().setEnabled(false);
+    instances[0].state = "running"; deferred[2].resolve(); await Promise.resolve(); assert.equal(harness.render().audioAvailability, "unavailable");
+    harness.get().setEnabled(true); assert.equal(harness.render().audioAvailability, "available");
+  } finally { harness.restore(); }
 });
