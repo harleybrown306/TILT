@@ -113,11 +113,14 @@ function recipientFixture({ signedOut = false, summary = { athlete_display_name:
   const client = { auth: { getUser: async () => ({ data: { user: signedOut ? null : { id: "recipient" } }, error: null }) }, rpc: async (name, args) => { calls.push({ name, args }); return rpcError ? { data: null, error: { message: "unavailable" } } : { data: summary ? [summary] : [], error: null }; } };
   const page = load("src/app/guardian-invite/[token]/page.tsx", {
     "next/navigation": { redirect: (destination) => { throw Error(`REDIRECT:${destination}`); } },
+    "@/lib/supabase/server": { createClient: async () => ({}) },
     "next/link": { default: (props) => React.createElement("a", props) },
     "@/components/roster-action-form": { default: ({ label }) => React.createElement("button", null, label) },
     "@/components/guardian-invitation-acceptance-form": { default: () => React.createElement("div", null, "Accept guardian access") },
     "@/lib/guardian-invitations": guardian,
     "@/lib/supabase/server": { createClient: async () => client },
+    "@/lib/supabase/service": { createServiceClient: () => client },
+    "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => signedOut ? null : { authUserId: "recipient", verifiedEmail: "recipient@example.test" } },
     "./actions": { acceptGuardianInvitation: async () => idle, switchGuardianInvitationAccount: async () => idle },
   }).default;
   return { page, calls };
@@ -137,19 +140,21 @@ test("recipient disclosure is generic before the DB summary email gate and shows
   assert.doesNotMatch(malformedMarkup, /Private Athlete/);
   const authorized = recipientFixture();
   assert.match(renderToStaticMarkup(await authorized.page({ params: Promise.resolve({ token }) })), /Private Athlete/);
-  assert.deepEqual(authorized.calls, [{ name: "get_guardian_invitation_summary", args: { p_invitation_token: token } }]);
+  assert.deepEqual(authorized.calls, [{ name: "server_get_guardian_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
 test("recipient acceptance invokes exactly one RPC and redirects only from its returned durable athlete identity", async () => {
   const calls = [];
   const actions = load("src/app/guardian-invite/[token]/actions.ts", {
     "next/navigation": { redirect: (destination) => { throw Error(`REDIRECT:${destination}`); } },
+    "@/lib/supabase/server": { createClient: async () => ({}) },
     "@/lib/guardian-invitations": guardian,
-    "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "recipient" } }, error: null }) }, rpc: async (name, args) => { calls.push({ name, args }); return { data: [{ athlete_id: returnedAthleteId }], error: null }; } }) },
+    "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async (name, args) => { calls.push({ name, args }); return { data: [{ athlete_id: returnedAthleteId }], error: null }; } }) },
+    "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "recipient", verifiedEmail: "recipient@example.test" }) },
     "@/lib/training-assignment": { isUuid: (value) => /^[0-9a-f-]{36}$/i.test(value) },
   });
   await assert.rejects(actions.acceptGuardianInvitation(token, idle, new FormData()), (error) => error.message === `REDIRECT:/?athlete=${returnedAthleteId}`);
-  assert.deepEqual(calls, [{ name: "accept_guardian_invitation", args: { p_invitation_token: token } }]);
+  assert.deepEqual(calls, [{ name: "server_accept_guardian_invitation", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
 test("malformed or errored acceptance responses never redirect or retry", async () => {
@@ -158,8 +163,10 @@ test("malformed or errored acceptance responses never redirect or retry", async 
     const calls = [];
     const actions = load("src/app/guardian-invite/[token]/actions.ts", {
       "next/navigation": { redirect: () => { throw Error("UNEXPECTED_REDIRECT"); } },
+      "@/lib/supabase/server": { createClient: async () => ({}) },
       "@/lib/guardian-invitations": guardian,
-      "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "recipient" } }, error: null }) }, rpc: async (name, args) => { calls.push({ name, args }); return response; } }) },
+      "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async (name, args) => { calls.push({ name, args }); return response; } }) },
+      "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "recipient", verifiedEmail: "recipient@example.test" }) },
       "@/lib/training-assignment": { isUuid: (value) => /^[0-9a-f-]{36}$/i.test(value) },
     });
     const result = await actions.acceptGuardianInvitation(token, idle, new FormData());
@@ -173,6 +180,7 @@ test("guardian UI remains RPC-only and carries no bearer persistence, permission
   assert.match(managerSource, /randomBytes\(48\)\.toString\("base64url"\)/);
   assert.match(managerSource, /createHash\("sha256"\)/);
   assert.match(managerPageSource, /list_my_guardian_invitations/);
-  assert.match(recipientActionsSource, /rpc\("accept_guardian_invitation"/);
+  assert.match(recipientActionsSource, /getCurrentVerifiedAuthIdentity\(\)/);
+  assert.match(recipientActionsSource, /rpc\("server_accept_guardian_invitation"/);
   assert.doesNotMatch(recipientActionsSource, /athleteId|permission|\.from\(|\.insert\(/);
 });

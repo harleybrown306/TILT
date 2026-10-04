@@ -5,6 +5,8 @@ import { Client } from "pg";
 
 const DATABASE_URL_ENV = "TILT_CONCURRENCY_DATABASE_URL";
 const CA_CERT_PATH_ENV = "TILT_CONCURRENCY_CA_CERT_PATH";
+const MODE_ENV = "TILT_FAMILY_CONCURRENCY_MODE";
+const LOCAL_DATABASE_URL_ENV = "TILT_FAMILY_CONCURRENCY_LOCAL_DATABASE_URL";
 const PROJECT_REF = "bikkjyvoldegbltragzn";
 const LEDGER_VERSION = "20260922024632";
 const DEADLINE_MS = 15_000;
@@ -12,7 +14,7 @@ const POLL_MS = 75;
 const EXPECTED_B_ERROR = "Family invitation is no longer pending";
 const EXPECTED_B_SQLSTATE = "P0001";
 // Reviewed from the separately authorized read-only TILT catalog capture.
-const EXPECTED_FUNCTION_FINGERPRINT = "08633148eae5a2c690e74c2eb870ca8e8e37dd91aa8352de9a9d34a3594184a1";
+const EXPECTED_FUNCTION_FINGERPRINT = "ab074ecbc76e8ba3f98fb17a43bc3b761eb417c2ae76bdcab642d4b70100d99e";
 const ACCEPTANCE_ARGUMENT_TYPE_OIDS = "25 2950 25 25 23";
 export const SAFE_IDENTITY_SQL = "WITH candidates AS (SELECT p.id, lower(btrim(u.email)) AS email FROM public.profiles p JOIN auth.users u ON u.id = p.id WHERE u.email_confirmed_at IS NOT NULL AND u.email IS NOT NULL AND btrim(u.email) <> '' AND lower(btrim(u.email)) ~ '^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$' AND NOT private.is_admin(p.id)) SELECT (SELECT id FROM candidates ORDER BY id LIMIT 1) AS manager_id, (SELECT id FROM candidates WHERE id <> (SELECT id FROM candidates ORDER BY id LIMIT 1) ORDER BY id LIMIT 1) AS recipient_id, (SELECT email FROM candidates WHERE id <> (SELECT id FROM candidates ORDER BY id LIMIT 1) ORDER BY id LIMIT 1) AS recipient_email";
 
@@ -42,6 +44,19 @@ function validateDatabaseUrl(value) {
   if (/^aws-\d+-[a-z0-9-]+\.pooler\.supabase\.com$/.test(host) && username === `postgres.${PROJECT_REF}`) return { mode: "session-pooler" };
   fail("PROJECT_OR_POOLER_MISMATCH");
 }
+function validateLocalDisposableDatabaseUrl(value) {
+  if (!value) fail("MISSING_LOCAL_DISPOSABLE_DATABASE_URL");
+  let url; try { url = new URL(value); } catch { fail("INVALID_LOCAL_DISPOSABLE_DATABASE_URL"); }
+  if (!/^(postgres|postgresql):$/.test(url.protocol) || !url.password || url.pathname !== "/postgres" || url.search) fail("INVALID_LOCAL_DISPOSABLE_DATABASE_URL");
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname.toLowerCase())) fail("NON_LOOPBACK_LOCAL_TARGET");
+  if (!url.port) fail("MISSING_LOCAL_DISPOSABLE_PORT");
+  if (url.port === "54322") fail("PROTECTED_TARGET_REFUSED");
+  return url.toString();
+}
+function validateMode(mode = process.env[MODE_ENV] || "REMOTE") {
+  if (mode !== "REMOTE" && mode !== "LOCAL_DISPOSABLE") fail("INVALID_MODE");
+  return mode;
+}
 function requireDatabaseUrl() {
   const value = process.env[DATABASE_URL_ENV];
   validateDatabaseUrl(value);
@@ -61,6 +76,15 @@ function connectionConfig(databaseUrl, caPath, readFile = readFileSync, environm
   sanitized.search = "";
   return { connectionString: sanitized.toString(), ssl: { ca: loadTrustedCa(caPath, readFile), rejectUnauthorized: true } };
 }
+function localConnectionConfig(databaseUrl, environment = process.env) {
+  if (environment.NODE_TLS_REJECT_UNAUTHORIZED === "0") fail("UNSAFE_NODE_TLS_CONFIGURATION");
+  return { connectionString: validateLocalDisposableDatabaseUrl(databaseUrl) };
+}
+function connectionTarget(environment = process.env) {
+  const mode = validateMode(environment[MODE_ENV]);
+  if (mode === "LOCAL_DISPOSABLE") return { mode, config: localConnectionConfig(environment[LOCAL_DATABASE_URL_ENV], environment) };
+  return { mode, config: connectionConfig(environment[DATABASE_URL_ENV], environment[CA_CERT_PATH_ENV], readFileSync, environment) };
+}
 function token() { return randomBytes(48).toString("base64url"); }
 function tokenHash(value) { return createHash("sha256").update(value).digest("hex"); }
 function makeFixture(marker) {
@@ -79,10 +103,17 @@ async function beginAuthenticated(client, profileId) {
   if (actor.actor !== profileId) fail("AUTH_UID_MISMATCH");
   return sessionPid(client);
 }
+async function serverAccept(client, who, fixture) {
+  await client.query("SET LOCAL ROLE service_role");
+  let queryError;
+  try { return await client.query("SELECT * FROM public.server_accept_family_team_invitation($1,$2,$3,$4,NULL,NULL,NULL)", [who.recipient_id, who.recipient_email, fixture.token, fixture.athleteId]); }
+  catch (error) { queryError = error; throw error; }
+  finally { try { await client.query("RESET ROLE"); } catch (resetError) { if (!queryError) throw resetError; } }
+}
 function ledgerEqual(left, right) { return left.count === right.count && left.versions.join(",") === right.versions.join(","); }
 async function ledgerSnapshot(observer) {
   const row = await queryOne(observer, "SELECT count(*)::int AS count, coalesce(array_agg(version ORDER BY version), '{}') AS versions FROM supabase_migrations.schema_migrations");
-  if (row.versions.at(-1) !== LEDGER_VERSION || row.versions.some((version) => version > LEDGER_VERSION)) fail("LEDGER_NOT_AT_24632");
+  if (row.versions.filter((version) => version === LEDGER_VERSION).length !== 1) fail("LEDGER_NOT_AT_24632");
   return { count: Number(row.count), versions: row.versions };
 }
 function functionFingerprint(definition) { return createHash("sha256").update(definition, "utf8").digest("hex"); }
@@ -98,7 +129,7 @@ function hasFixedEmptySearchPath(config) {
 function acceptsContract(row) {
   return exactAcceptanceOverload(row)
     && row.return_type === "TABLE(team_id uuid, athlete_id uuid)" && row.prosecdef && row.empty_search_path && hasFixedEmptySearchPath(row.function_config)
-    && row.authenticated_execute && !row.anon_execute && !row.public_execute && fingerprintMatches(row.definition);
+    && !row.authenticated_execute && !row.anon_execute && !row.public_execute && fingerprintMatches(row.definition);
 }
 async function preflight(observer, a, b, fixture) {
   const ledger = await ledgerSnapshot(observer);
@@ -180,12 +211,11 @@ function unexpectedPhase(phase, error) {
   return error?.message?.startsWith("HARNESS_") ? error.message : `HARNESS_UNEXPECTED_${phase}`;
 }
 async function main() {
-  const databaseUrl = requireDatabaseUrl();
-  const tlsConfig = connectionConfig(databaseUrl, process.env[CA_CERT_PATH_ENV]);
-  const a = new Client({ ...tlsConfig, application_name: "tilt-concurrency-A", connectionTimeoutMillis: DEADLINE_MS });
-  const b = new Client({ ...tlsConfig, application_name: "tilt-concurrency-B", connectionTimeoutMillis: DEADLINE_MS });
-  const observer = new Client({ ...tlsConfig, application_name: "tilt-concurrency-observer", connectionTimeoutMillis: DEADLINE_MS });
-  const cleanupSession = new Client({ ...tlsConfig, application_name: "tilt-concurrency-cleanup", connectionTimeoutMillis: DEADLINE_MS });
+  const target = connectionTarget(); report("mode", target.mode);
+  const a = new Client({ ...target.config, application_name: "tilt-concurrency-A", connectionTimeoutMillis: DEADLINE_MS });
+  const b = new Client({ ...target.config, application_name: "tilt-concurrency-B", connectionTimeoutMillis: DEADLINE_MS });
+  const observer = new Client({ ...target.config, application_name: "tilt-concurrency-observer", connectionTimeoutMillis: DEADLINE_MS });
+  const cleanupSession = new Client({ ...target.config, application_name: "tilt-concurrency-cleanup", connectionTimeoutMillis: DEADLINE_MS });
   const fixture = makeFixture(`TILT concurrency ${randomUUID()}`); let pre; let overall = "FAIL"; let phase = "CONNECTION"; let fixtureMayExist = false; let bInFlight = false; const clientState = {};
   for (const client of [a, b, observer, cleanupSession]) attachClientErrorHandler(client, clientState);
   try {
@@ -196,8 +226,8 @@ async function main() {
     phase = "FIXTURE_SETUP"; const who = await identities(observer); fixtureMayExist = true; await setup(a, who, fixture); report("fixture_setup", "PASS");
     assertNoClientError(clientState);
     phase = "AUTHENTICATION"; if (await beginAuthenticated(a, who.recipient_id) !== pre.aPid || await beginAuthenticated(b, who.recipient_id) !== pre.bPid) fail("SESSION_PID_CHANGED");
-    phase = "A_ACCEPTANCE"; await bounded("A_ACCEPTANCE_TIMEOUT", a.query("SELECT * FROM public.accept_family_team_invitation($1, $2)", [fixture.token, fixture.athleteId])); report("A_acceptance", "PASS");
-    phase = "BLOCKING_PROOF"; const bAttempt = b.query("SELECT * FROM public.accept_family_team_invitation($1, $2)", [fixture.token, fixture.athleteId]); bInFlight = true; void bAttempt.then(() => { bInFlight = false; }, () => { bInFlight = false; }); await waitForBlocking(observer, pre.aPid, pre.bPid); report("B_blocked_by_A", "PASS");
+    phase = "A_ACCEPTANCE"; await bounded("A_ACCEPTANCE_TIMEOUT", serverAccept(a, who, fixture)); report("A_acceptance", "PASS");
+    phase = "BLOCKING_PROOF"; const bAttempt = serverAccept(b, who, fixture); bInFlight = true; void bAttempt.then(() => { bInFlight = false; }, () => { bInFlight = false; }); await waitForBlocking(observer, pre.aPid, pre.bPid); report("B_blocked_by_A", "PASS");
     phase = "A_COMMIT"; await bounded("A_COMMIT_TIMEOUT", a.query("COMMIT")); report("A_commit", "PASS");
     phase = "B_RESULT"; try { await bounded("B_RESULT_TIMEOUT", bAttempt); fail("B_UNEXPECTED_SUCCESS"); } catch (error) { if (bInFlight || !expectedBError(error)) fail("B_UNEXPECTED_ERROR"); report("B_post_commit_result", "expected rejection"); }
     await rollback(b);
@@ -211,4 +241,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main(
   console.error(error?.message?.startsWith("HARNESS_") ? error.message : "HARNESS_UNEXPECTED");
   process.exitCode = 1;
 });
-export { DATABASE_URL_ENV, CA_CERT_PATH_ENV, validateDatabaseUrl, requireDatabaseUrl, loadTrustedCa, connectionConfig, expectedBError, ledgerEqual, functionFingerprint, fingerprintMatches, exactAcceptanceOverload, hasFixedEmptySearchPath, attachClientErrorHandler, closeClient, abandonBusyClient, unexpectedPhase };
+export { DATABASE_URL_ENV, CA_CERT_PATH_ENV, MODE_ENV, LOCAL_DATABASE_URL_ENV, validateDatabaseUrl, validateLocalDisposableDatabaseUrl, validateMode, requireDatabaseUrl, loadTrustedCa, connectionConfig, localConnectionConfig, connectionTarget, expectedBError, ledgerEqual, functionFingerprint, fingerprintMatches, exactAcceptanceOverload, hasFixedEmptySearchPath, attachClientErrorHandler, closeClient, abandonBusyClient, unexpectedPhase };

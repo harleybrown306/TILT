@@ -27,10 +27,9 @@ function fixture({ result = [{ team_id: returnedTeam, athlete_id: returnedAthlet
   const calls = [];
   const actions = load({
     "next/navigation": { redirect(destination) { throw Error(`REDIRECT:${destination}`); } },
-    "@/lib/supabase/server": { createClient: async () => ({
-      auth: { getUser: async () => ({ data: { user: signedOut ? null : { id: "recipient-account" } }, error: null }) },
-      rpc: async (name, args) => { calls.push({ name, args }); return { data: result, error, status }; },
-    }) },
+    "@/lib/supabase/server": { createClient: async () => ({}) },
+    "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async (name, args) => { calls.push({ name, args }); return { data: result, error, status }; } }) },
+    "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => signedOut ? null : { authUserId: "recipient-account", verifiedEmail: "recipient@example.test" } },
     "@/lib/family-team-invitations": { familyInvitationLoginPath: () => "/login", isFamilyInvitationToken: (value) => value === token },
     "@/lib/training-assignment": { isUuid: (value) => /^[0-9a-f-]{36}$/i.test(value) },
   });
@@ -46,8 +45,8 @@ function form(values = {}) {
 test("existing athlete acceptance sends the untrusted subject only to the canonical RPC and redirects from its returned identity", async () => {
   const { actions, calls } = fixture();
   await assert.rejects(actions.acceptFamilyTeamInvitation(token, idle, form({ athleteId: submittedAthlete })), (error) => error.message === `REDIRECT:/?athlete=${returnedAthlete}`);
-  assert.deepEqual(calls, [{ name: "accept_family_team_invitation", args: {
-    p_invitation_token: token, p_existing_athlete_id: submittedAthlete,
+  assert.deepEqual(calls, [{ name: "server_accept_family_team_invitation", args: {
+    p_auth_user_id: "recipient-account", p_verified_email: "recipient@example.test", p_invitation_token: token, p_existing_athlete_id: submittedAthlete,
     p_first_name: null, p_last_name: null, p_graduation_year: null,
   } }]);
 });
@@ -56,7 +55,7 @@ test("new child acceptance uses one atomic RPC call with normalized structured d
   const { actions, calls } = fixture();
   await assert.rejects(actions.acceptFamilyTeamInvitation(token, idle, form({ firstName: "  New ", lastName: " Child  ", graduationYear: "2034" })), /REDIRECT/);
   assert.deepEqual(calls[0].args, {
-    p_invitation_token: token, p_existing_athlete_id: null,
+    p_auth_user_id: "recipient-account", p_verified_email: "recipient@example.test", p_invitation_token: token, p_existing_athlete_id: null,
     p_first_name: "New", p_last_name: "Child", p_graduation_year: 2034,
   });
 });
@@ -114,7 +113,8 @@ test("malformed canonical acceptance results never redirect or fall back to a su
 test("acceptance action keeps all child and invitation mutations inside the canonical RPC", () => {
   const source = readFileSync(root + "src/app/family-invite/[token]/actions.ts", "utf8");
   const component = readFileSync(root + "src/components/family-invitation-acceptance-form.tsx", "utf8");
-  assert.match(source, /rpc\("accept_family_team_invitation"/);
+  assert.match(source, /getCurrentVerifiedAuthIdentity\(\)/);
+  assert.match(source, /createServiceClient\(\)\.rpc\("server_accept_family_team_invitation"/);
   assert.doesNotMatch(source, /create_my_athlete|athlete_profile_relationships|team_athlete_memberships|\.from\(|\.insert\(/);
   assert.doesNotMatch(component, /name="(?:email|birth|dob|address|school|password|token_hash)"/i);
   assert.match(component, /firstName[\s\S]*lastName[\s\S]*graduationYear/);

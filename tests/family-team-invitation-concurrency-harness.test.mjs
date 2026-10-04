@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
-import { DATABASE_URL_ENV, validateDatabaseUrl, loadTrustedCa, connectionConfig, expectedBError, ledgerEqual, functionFingerprint, fingerprintMatches, exactAcceptanceOverload, hasFixedEmptySearchPath, attachClientErrorHandler, closeClient, abandonBusyClient, unexpectedPhase, SAFE_IDENTITY_SQL } from "./database/run_family_team_invitation_concurrency.mjs";
+import { DATABASE_URL_ENV, MODE_ENV, validateDatabaseUrl, validateLocalDisposableDatabaseUrl, validateMode, loadTrustedCa, connectionConfig, localConnectionConfig, connectionTarget, expectedBError, ledgerEqual, functionFingerprint, fingerprintMatches, exactAcceptanceOverload, hasFixedEmptySearchPath, attachClientErrorHandler, closeClient, abandonBusyClient, unexpectedPhase, SAFE_IDENTITY_SQL } from "./database/run_family_team_invitation_concurrency.mjs";
 
 const path = fileURLToPath(new URL("database/run_family_team_invitation_concurrency.mjs", import.meta.url));
 const harness = readFileSync(path, "utf8");
@@ -34,6 +34,17 @@ test("rejects malformed or unrecognized hosts", () => {
   rejects("not a url", "INVALID_DATABASE_URL");
   rejects(direct.replace("db." + ref + ".supabase.co", "database.example.test"), "PROJECT_OR_POOLER_MISMATCH");
 });
+test("local-disposable mode is an explicit fail-closed opt-in", () => {
+  const local = "postgresql://postgres:local@127.0.0.1:55562/postgres";
+  assert.equal(validateMode("LOCAL_DISPOSABLE"), "LOCAL_DISPOSABLE");
+  assert.equal(validateLocalDisposableDatabaseUrl(local), local);
+  assert.throws(() => validateLocalDisposableDatabaseUrl(), /HARNESS_MISSING_LOCAL_DISPOSABLE_DATABASE_URL/);
+  assert.throws(() => validateLocalDisposableDatabaseUrl("postgresql://postgres:local@127.0.0.1:54322/postgres"), /HARNESS_PROTECTED_TARGET_REFUSED/);
+  assert.throws(() => validateLocalDisposableDatabaseUrl("postgresql://postgres:local@db.example.test:55562/postgres"), /HARNESS_NON_LOOPBACK_LOCAL_TARGET/);
+  assert.throws(() => connectionTarget({ [MODE_ENV]: "LOCAL_DISPOSABLE" }), /HARNESS_MISSING_LOCAL_DISPOSABLE_DATABASE_URL/);
+  assert.deepEqual(localConnectionConfig(local), { connectionString: local });
+  assert.doesNotMatch(harness, /LOCAL_URL|54322.*fallback/);
+});
 test("uses three independent native pg clients", () => {
   for (const name of ["tilt-concurrency-A", "tilt-concurrency-B", "tilt-concurrency-observer"]) assert.ok(harness.includes(`application_name: "${name}"`));
 });
@@ -47,15 +58,15 @@ test("sanitizes sslmode before supplying explicit verified CA TLS", () => {
   assert.doesNotMatch(config.connectionString, /sslmode=/); assert.deepEqual(config.ssl, { ca: syntheticCa, rejectUnauthorized: true });
 });
 test("rejects process-wide unverified TLS mode", () => assert.throws(() => connectionConfig(direct, "synthetic-ca", () => syntheticCa, { NODE_TLS_REJECT_UNAUTHORIZED: "0" }), /HARNESS_UNSAFE_NODE_TLS_CONFIGURATION/));
-test("all clients share the explicit verified CA configuration", () => {
-  for (const name of ["tilt-concurrency-A", "tilt-concurrency-B", "tilt-concurrency-observer", "tilt-concurrency-cleanup"]) assert.ok(harness.includes(`...tlsConfig, application_name: "${name}"`));
+test("remote clients retain explicit verified CA TLS and local selection is separate", () => {
+  for (const name of ["tilt-concurrency-A", "tilt-concurrency-B", "tilt-concurrency-observer", "tilt-concurrency-cleanup"]) assert.ok(harness.includes(`...target.config, application_name: "${name}"`));
   assert.match(harness, /rejectUnauthorized: true/); assert.doesNotMatch(harness, /rejectUnauthorized:\s*false/);
 });
 test("requires distinct backend PIDs before fixtures", () => {
   assert.match(harness, /pg_backend_pid\(\)/); assert.match(harness, /new Set\(pids\)\.size !== 3/); assert.match(harness, /NON_DISTINCT_BACKEND_PIDS/);
 });
 test("requires the observer to identify A as B's blocker", () => assert.match(harness, /\$1::int = ANY\(pg_blocking_pids\(\$2::int\)\)/));
-test("B uses the same captured token and athlete as A", () => assert.match(harness, /const bAttempt = b\.query\("SELECT \* FROM public\.accept_family_team_invitation\(\$1, \$2\)", \[fixture\.token, fixture\.athleteId\]\)/));
+test("B uses the same captured token and athlete as A through the server boundary", () => assert.match(harness, /const bAttempt = serverAccept\(b, who, fixture\)/));
 test("commits A only after positive blocking proof", () => assert.match(harness, /await waitForBlocking\(observer, pre\.aPid, pre\.bPid\);[\s\S]*await bounded\("A_COMMIT_TIMEOUT"/));
 test("asserts B's exact expected SQLSTATE and message", () => {
   assert.equal(expectedBError({ code: "P0001", message: "Family invitation is no longer pending" }), true);
@@ -63,7 +74,7 @@ test("asserts B's exact expected SQLSTATE and message", () => {
   assert.equal(expectedBError({ code: "XX000", message: "Family invitation is no longer pending" }), false);
 });
 test("keeps cleanup in finally on an independent cleanup client", () => {
-  assert.match(harness, /new Client\(\{ \.\.\.tlsConfig, application_name: "tilt-concurrency-cleanup"/);
+  assert.match(harness, /new Client\(\{ \.\.\.target\.config, application_name: "tilt-concurrency-cleanup"/);
   assert.match(harness, /finally \{ try \{ if \(fixtureMayExist\) \{ phase = "CLEANUP"; await cleanup\(cleanupSession, fixture\);/);
 });
 test("cleanup deletes only captured fixture IDs", () => {
@@ -92,9 +103,10 @@ test("uses whitelist diagnostics instead of raw errors or stacks", () => {
 test("has bounded connection query observer cleanup and ledger phases", () => {
   for (const code of ["CONNECTION_TIMEOUT", "QUERY_TIMEOUT", "OBSERVER_QUERY_TIMEOUT", "CLEANUP_TIMEOUT", "LEDGER_NOT_AT_24632"]) assert.ok(harness.includes(code));
 });
-test("uses authenticated JWT role semantics and no service-role API bypass", () => {
+test("uses authenticated setup and a narrow server-only acceptance boundary", () => {
   assert.match(harness, /SET LOCAL ROLE authenticated/); assert.match(harness, /request\.jwt\.claim\.sub/); assert.match(harness, /auth\.uid\(\)/);
-  assert.doesNotMatch(harness, /service_role|SUPABASE_SERVICE_ROLE|NEXT_PUBLIC_SUPABASE|supabase\.rpc|apply_migration|CREATE FUNCTION/);
+  assert.match(harness, /SET LOCAL ROLE service_role/); assert.match(harness, /server_accept_family_team_invitation/); assert.match(harness, /RESET ROLE/);
+  assert.doesNotMatch(harness, /SUPABASE_SERVICE_ROLE|NEXT_PUBLIC_SUPABASE|supabase\.rpc|apply_migration|CREATE FUNCTION/);
 });
 test("uses the exact PostgreSQL literal-dot email regex for safe identities", () => {
   assert.ok(SAFE_IDENTITY_SQL.includes("'^[^[:space:]@]+@[^[:space:]@]+\\.[^[:space:]@]+$'"));

@@ -2,6 +2,8 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 import { familyInvitationLoginPath, isFamilyInvitationToken } from "@/lib/family-team-invitations";
 import { isUuid } from "@/lib/training-assignment";
 import type { RosterState } from "@/lib/team-invitations";
@@ -103,20 +105,15 @@ export async function acceptFamilyTeamInvitation(token: string, state: FamilyInv
   let invoked = false;
   let acceptedAthleteId: string | null = null;
   try {
-    const supabase = await createClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) return { status: "error", message: "Sign in with the email address that received this invitation." };
+    const identity = await getCurrentVerifiedAuthIdentity();
+    if (!identity) return { status: "error", message: "Sign in with the email address that received this invitation." };
     invoked = true;
-    const { data: accepted, error, status } = await supabase.rpc("accept_family_team_invitation", {
-      p_invitation_token: token,
-      p_existing_athlete_id: input.athleteId,
-      p_first_name: input.firstName,
-      p_last_name: input.lastName,
-      p_graduation_year: input.graduationYear,
+    const { data: accepted, error } = await createServiceClient().rpc("server_accept_family_team_invitation", {
+      p_auth_user_id: identity.authUserId, p_verified_email: identity.verifiedEmail, p_invitation_token: token, p_existing_athlete_id: input.athleteId, p_first_name: input.firstName, p_last_name: input.lastName, p_graduation_year: input.graduationYear,
     });
     const result = accepted?.[0];
     if (error || accepted?.length !== 1 || !result || !isUuid(result.team_id) || !isUuid(result.athlete_id)) {
-      return error ? acceptanceError(error.message, status) : reviewRequired();
+      return error ? acceptanceError(error.message, undefined) : reviewRequired();
     }
     acceptedAthleteId = result.athlete_id;
   } catch {

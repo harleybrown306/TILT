@@ -7,7 +7,7 @@ import { validateLocalDatabaseUrl, validateLiveDatabaseUrl, validateMode, certif
 
 const path = fileURLToPath(new URL("database/run_guardian_invitation_concurrency.mjs", import.meta.url));
 const harness = readFileSync(path, "utf8");
-const local = "postgresql://postgres:local@127.0.0.1:54322/postgres";
+const local = "postgresql://postgres:local@127.0.0.1:55552/postgres";
 const live = "postgresql://postgres:synthetic@db.bikkjyvoldegbltragzn.supabase.co:5432/postgres?sslmode=verify-full";
 class SyntheticCertificate {
   constructor(value) {
@@ -26,9 +26,12 @@ const fixture = {
   tokenByInvitation: new Map([["00000000-0000-4000-8000-000000000005", "raw-bearer-token-must-never-appear"]]),
 };
 
-test("guardian concurrency harness accepts only the explicit local database endpoint", () => {
+test("guardian concurrency harness accepts only an explicit disposable local database endpoint", () => {
   assert.equal(validateLocalDatabaseUrl(local), local);
-  for (const value of ["postgresql://postgres:local@db.bikkjyvoldegbltragzn.supabase.co:5432/postgres", "postgresql://postgres:local@127.0.0.1:5432/postgres", "postgresql://postgres:local@10.0.0.1:54322/postgres", ""]) assert.throws(() => validateLocalDatabaseUrl(value), /HARNESS_(?:NON_LOOPBACK_TARGET|MISSING_LOCAL_DATABASE_URL)/);
+  assert.throws(() => validateLocalDatabaseUrl("postgresql://postgres:local@127.0.0.1:54322/postgres"), /HARNESS_PROTECTED_TARGET_REFUSED/);
+  for (const value of ["postgresql://postgres:local@db.bikkjyvoldegbltragzn.supabase.co:5432/postgres", "postgresql://postgres:local@127.0.0.1/postgres", "postgresql://postgres:local@10.0.0.1:55552/postgres", ""]) assert.throws(() => validateLocalDatabaseUrl(value), /HARNESS_(?:NON_LOOPBACK_TARGET|MISSING_LOCAL_DATABASE_URL|DISPOSABLE_TARGET_REQUIRED)/);
+  assert.match(harness, /PROTECTED_TARGET_REFUSED/);
+  assert.match(harness, /report\("target"/);
 });
 test("guardian concurrency mode is explicit and rejects live failure injection before connection", () => {
   assert.equal(validateMode("LOCAL", "after-athlete"), "LOCAL");
@@ -54,7 +57,7 @@ test("guardian harness proves native blocking with four distinct clients and no 
   assert.doesNotMatch(harness, /pg_terminate_backend|rejectUnauthorized:\s*false/);
 });
 test("guardian harness pins local migration preflight, hardened RPC contract, and exact cleanup", () => {
-  for (const text of ["20260922194927", "979182041e92d1cd0b19c83adb379248aca14347c3593278b0984d1d7d449686", "4655b58fc53fa98140c36023340e103096bafacf479658fa97919bf61f94f58d", "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa", "pg_get_functiondef", "accept_guardian_invitation' AND p.proargtypes='25'::oidvector", "guardian_invitations", "SET LOCAL ROLE authenticated", "request.jwt.claim.sub", "DELETE FROM public.guardian_invitations WHERE token_hash = ANY($1::text[])", "DELETE FROM public.athlete_profile_relationships WHERE athlete_id = ANY($1::uuid[]) AND profile_id = ANY($2::uuid[])", "FROM public.profiles WHERE id = ANY($3::uuid[])", "DELETE FROM auth.users WHERE id=$1"]) assert.ok(harness.includes(text));
+  for (const text of ["20260922194927", "979182041e92d1cd0b19c83adb379248aca14347c3593278b0984d1d7d449686", "79b35b5baa899577454b6f2160d4f0743e3e254d52bbeb8294f9f09b848eeb3b", "807025ad50d4ed219d2c9c7d299c004f824eb00cf7f65afef607d07b72e6cafa", "pg_get_functiondef", "accept_guardian_invitation' AND p.proargtypes='25'::oidvector", "guardian_invitations", "SET LOCAL ROLE authenticated", "request.jwt.claim.sub", "DELETE FROM public.guardian_invitations WHERE token_hash = ANY($1::text[])", "DELETE FROM public.athlete_profile_relationships WHERE athlete_id = ANY($1::uuid[]) AND profile_id = ANY($2::uuid[])", "FROM public.profiles WHERE id = ANY($3::uuid[])", "DELETE FROM auth.users WHERE id=$1"]) assert.ok(harness.includes(text));
   assert.doesNotMatch(harness, /DELETE FROM public\.[a-z_]+\s*;/);
 });
 test("guardian table preflight rejects each authenticated direct-access drift", () => {

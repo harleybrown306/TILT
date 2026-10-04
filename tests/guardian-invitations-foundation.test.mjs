@@ -9,7 +9,7 @@ const provenance = readFileSync(new URL("../docs/database/create_guardian_invita
 
 test("guardian invitation migration is the unique next canonical forward artifact", () => {
   const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url)).filter((name) => /guardian_invitation/.test(name));
-  assert.deepEqual(migrations, [migrationName]);
+  assert.deepEqual(migrations, [migrationName, "20261003132630_restore_guardian_invitation_own_email_guard.sql"]);
   assert.match(provenance, new RegExp(migrationName));
   assert.match(sql, /^BEGIN;[\s\S]*COMMIT;\s*$/);
 });
@@ -92,8 +92,7 @@ test("rollback validator covers fixed permissions, privacy, lifecycle, authority
   for (const phrase of [
     "MANAGE guardian could not create invitation", "VIEW-only, ACT-only, staff-only, or unrelated actor created guardian invitation",
     "guardian invitation table/RLS is missing", "guardian invitation function signatures are incomplete",
-    "guardian invitation function grants are incorrect", "wrong account learned minor identity", "unverified account learned minor identity",
-    "unverified account accepted guardian invitation", "fixed VIEW-only guardian grant was not created",
+    "authenticated guardian operation grants are incorrect", "recipient guardian operation grants are incorrect", "server-mediated guardian operation grants are incorrect", "wrong account learned minor identity", "fixed VIEW-only guardian grant was not created",
     "stronger guardian was downgraded or changed", "revoked guardian history was not preserved",
     "self relationship was converted to guardian", "accepted guardian invitation replay succeeded", "existing VIEW guardian acceptance was not idempotent", "revoking guardian invitation changed existing guardian access",
     "self MANAGE relationship created guardian invitation", "self MANAGE relationship listed guardian invitations", "self MANAGE relationship revoked guardian invitation", "self-based inviter authority accepted guardian invitation",
@@ -107,7 +106,14 @@ test("rollback validator covers fixed permissions, privacy, lifecycle, authority
   assert.match(validator, /DO \$validation\$\n#variable_conflict error\nDECLARE/);
   assert.match(validator, /NOT \(coalesce\(procedure\.proconfig, ARRAY\[\]::text\[\]\) @> ARRAY\['search_path=""'\]::text\[\]\)/);
   assert.doesNotMatch(validator, /!@>/);
-  assert.match(validator, /manager_email text; recipient_email text; view_email text;/);
+  for (const declaration of [
+    /\bmanager_email text\b/,
+    /\brecipient_email text\b/,
+    /\bunrelated_email text\b/,
+    /\bview_email text\b/,
+  ]) {
+    assert.match(validator, declaration);
+  }
   assert.match(validator, /SELECT lower\(btrim\(email\)\) INTO manager_email FROM auth\.users WHERE id=manager_id;/);
   assert.match(validator, /SELECT lower\(btrim\(email\)\) INTO recipient_email FROM auth\.users WHERE id=recipient_id;/);
   assert.match(validator, /SELECT lower\(btrim\(email\)\) INTO view_email FROM auth\.users WHERE id=view_id;/);

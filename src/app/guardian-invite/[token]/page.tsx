@@ -3,7 +3,8 @@ import { redirect } from "next/navigation";
 import GuardianInvitationAcceptanceForm from "@/components/guardian-invitation-acceptance-form";
 import RosterActionForm from "@/components/roster-action-form";
 import { guardianInvitationLoginPath, guardianInvitationStatus, isGuardianInvitationToken, parseGuardianInvitationSummary, type GuardianInvitationSummary } from "@/lib/guardian-invitations";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 import { acceptGuardianInvitation, switchGuardianInvitationAccount } from "./actions";
 
 function unavailableMessage(status: ReturnType<typeof guardianInvitationStatus>) {
@@ -16,14 +17,13 @@ function unavailableMessage(status: ReturnType<typeof guardianInvitationStatus>)
 export default async function GuardianInvitationPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!isGuardianInvitationToken(token)) return <UnavailableInvitation message="This invitation is unavailable." />;
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) redirect(guardianInvitationLoginPath(token));
+  const identity = await getCurrentVerifiedAuthIdentity();
+  if (!identity) redirect(guardianInvitationLoginPath(token));
 
   let summary: GuardianInvitationSummary | null = null;
   let uncertain = false;
   try {
-    const { data, error } = await supabase.rpc("get_guardian_invitation_summary", { p_invitation_token: token });
+    const { data, error } = await createServiceClient().rpc("server_get_guardian_invitation_summary", { p_auth_user_id: identity.authUserId, p_verified_email: identity.verifiedEmail, p_invitation_token: token });
     const parsed = error ? { kind: "malformed" as const } : parseGuardianInvitationSummary(data);
     if (parsed.kind === "malformed") uncertain = true;
     else if (parsed.kind === "summary") summary = parsed.value;

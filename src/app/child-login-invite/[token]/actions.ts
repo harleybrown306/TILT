@@ -3,6 +3,8 @@
 import { redirect } from "next/navigation";
 import { childLoginInvitationLoginPath, isChildLoginInvitationToken, parseChildLoginInvitationAcceptance } from "@/lib/child-login-invitations";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 import type { RosterState } from "@/lib/team-invitations";
 
 export type ChildLoginInvitationAcceptanceState = {
@@ -32,11 +34,10 @@ export async function acceptChildLoginInvitation(token: string, state: ChildLogi
   let invoked = false;
   let acceptedAthleteId: string | null = null;
   try {
-    const supabase = await createClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) return { status: "error", message: "Sign in with the invited account." };
+    const identity = await getCurrentVerifiedAuthIdentity();
+    if (!identity) return { status: "error", message: "Sign in with the invited account." };
     invoked = true;
-    const { data, error } = await supabase.rpc("accept_child_login_invitation", { p_invitation_token: token });
+    const { data, error } = await createServiceClient().rpc("server_accept_child_login_invitation", { p_auth_user_id: identity.authUserId, p_verified_email: identity.verifiedEmail, p_invitation_token: token });
     if (error) return { status: "error", message: "This invitation is unavailable." };
     const result = parseChildLoginInvitationAcceptance(data);
     if (!result) return reviewRequired();

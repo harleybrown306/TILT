@@ -5,7 +5,7 @@ BEGIN;
 
 DO $validation$
 DECLARE
-  manager_id uuid; recipient_id uuid; unrelated_id uuid; validator_team_id uuid; recipient_email text;
+  manager_id uuid; recipient_id uuid; unrelated_id uuid; validator_team_id uuid; recipient_email text; unrelated_email text;
   managed_id uuid := gen_random_uuid(); view_id uuid := gen_random_uuid(); archived_id uuid := gen_random_uuid(); guessed_id uuid := gen_random_uuid();
   invitation_id uuid; new_athlete_id uuid; candidate_id uuid;
   token text; validator_token_hash text; failed boolean; athletes_before integer; relationships_before integer; rosters_before integer;
@@ -21,7 +21,7 @@ BEGIN
     AND btrim(u.email) <> ''
     AND lower(btrim(u.email)) ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
   ORDER BY p.id LIMIT 1;
-  SELECT p.id INTO unrelated_id
+  SELECT p.id, u.email INTO unrelated_id, unrelated_email
   FROM public.profiles AS p JOIN auth.users AS u ON u.id = p.id
   WHERE p.id NOT IN (manager_id, recipient_id)
     AND NOT private.is_admin(p.id)
@@ -31,6 +31,9 @@ BEGIN
   END IF;
   IF unrelated_id IS NULL THEN
     RAISE EXCEPTION 'Validator fixture error: requires a non-admin unrelated auth-backed profile';
+  END IF;
+  IF unrelated_email IS NULL OR btrim(unrelated_email) = '' THEN
+    RAISE EXCEPTION 'Validator fixture error: requires a usable unrelated profile email';
   END IF;
   INSERT INTO public.teams(name, created_by_user_id) VALUES ('Family invitation validation ' || gen_random_uuid(), manager_id) RETURNING id INTO validator_team_id;
   -- on_team_created already creates the manager's coach membership.
@@ -72,29 +75,42 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN failed := true; END;
   EXECUTE 'RESET ROLE'; IF NOT failed THEN RAISE EXCEPTION 'manager token_hash read was not denied'; END IF;
 
+  -- Boundary A: the authenticated browser path is revoked independently of
+  -- invitation state.  This must fail by effective function privilege.
+  failed := false; BEGIN
+    PERFORM set_config('request.jwt.claim.sub', recipient_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
+    PERFORM public.accept_family_team_invitation(token, managed_id);
+  EXCEPTION WHEN insufficient_privilege THEN failed := true;
+  END;
+  EXECUTE 'RESET ROLE';
+  IF NOT failed THEN RAISE EXCEPTION 'authenticated direct family acceptance was not denied'; END IF;
+
+  -- Boundary B below assumes the server has already completed authoritative
+  -- Auth verification and supplies fixture-specific trusted ID/email values.
+  -- It tests database authorization and transactions, not GoTrue verification.
   -- Wrong email, guessed UUID, VIEW-only, and archived athlete selections all fail.
   failed := false; BEGIN
-    PERFORM set_config('request.jwt.claim.sub', unrelated_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
-    PERFORM public.accept_family_team_invitation(token, managed_id); EXECUTE 'RESET ROLE';
+    EXECUTE 'SET LOCAL ROLE service_role';
+    PERFORM public.server_accept_family_team_invitation(unrelated_id, lower(btrim(unrelated_email)), token, managed_id, NULL, NULL, NULL); EXECUTE 'RESET ROLE';
   EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed := true; END;
   IF NOT failed THEN RAISE EXCEPTION 'wrong email accepted invitation'; END IF;
   FOREACH candidate_id IN ARRAY ARRAY[guessed_id, view_id, archived_id] LOOP
     failed := false; BEGIN
-      PERFORM set_config('request.jwt.claim.sub', recipient_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
-      PERFORM public.accept_family_team_invitation(token, candidate_id); EXECUTE 'RESET ROLE';
+      EXECUTE 'SET LOCAL ROLE service_role';
+      PERFORM public.server_accept_family_team_invitation(recipient_id, lower(btrim(recipient_email)), token, candidate_id, NULL, NULL, NULL); EXECUTE 'RESET ROLE';
     EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed := true; END;
     IF NOT failed THEN RAISE EXCEPTION 'guessed, VIEW-only, or archived athlete accepted invitation'; END IF;
   END LOOP;
 
   -- Existing membership is idempotent, but an accepted token cannot be replayed.
   INSERT INTO public.team_athlete_memberships(team_id, athlete_id, created_by_profile_id) VALUES (validator_team_id, managed_id, manager_id);
-  PERFORM set_config('request.jwt.claim.sub', recipient_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
-  PERFORM public.accept_family_team_invitation(token, managed_id); EXECUTE 'RESET ROLE';
+  EXECUTE 'SET LOCAL ROLE service_role';
+  PERFORM public.server_accept_family_team_invitation(recipient_id, lower(btrim(recipient_email)), token, managed_id, NULL, NULL, NULL); EXECUTE 'RESET ROLE';
   IF (SELECT count(*) FROM public.team_athlete_memberships AS m WHERE m.team_id=validator_team_id AND m.athlete_id=managed_id) <> 1
      OR (SELECT i.status FROM public.family_team_invitations AS i WHERE i.id=invitation_id) <> 'accepted' THEN RAISE EXCEPTION 'idempotent acceptance failed'; END IF;
   failed := false; BEGIN
-    PERFORM set_config('request.jwt.claim.sub', recipient_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
-    PERFORM public.accept_family_team_invitation(token, managed_id); EXECUTE 'RESET ROLE';
+    EXECUTE 'SET LOCAL ROLE service_role';
+    PERFORM public.server_accept_family_team_invitation(recipient_id, lower(btrim(recipient_email)), token, managed_id, NULL, NULL, NULL); EXECUTE 'RESET ROLE';
   EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed := true; END;
   IF NOT failed THEN RAISE EXCEPTION 'accepted invitation replay succeeded'; END IF;
 
@@ -103,17 +119,17 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub', manager_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
   SELECT created.invitation_id INTO invitation_id FROM public.create_family_team_invitation(validator_team_id,recipient_email,validator_token_hash) AS created;
   PERFORM public.revoke_family_team_invitation(invitation_id); EXECUTE 'RESET ROLE';
-  failed := false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_family_team_invitation(token,NULL,'Revoked','Child',2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed := false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_family_team_invitation(recipient_id,lower(btrim(recipient_email)),token,NULL,'Revoked','Child',2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'revoked token accepted'; END IF;
   token := repeat('c',64); validator_token_hash := encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub', manager_id::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
   SELECT created.invitation_id INTO invitation_id FROM public.create_family_team_invitation(validator_team_id,recipient_email,validator_token_hash,clock_timestamp()+interval '1 second') AS created; EXECUTE 'RESET ROLE'; PERFORM pg_sleep(1.1);
-  failed := false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_family_team_invitation(token,NULL,'Expired','Child',2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed := false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_family_team_invitation(recipient_id,lower(btrim(recipient_email)),token,NULL,'Expired','Child',2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'expired token accepted'; END IF;
   -- New child is structured, recipient-guardian-managed, durably rostered, and never a legacy parent membership or self relation.
   token := repeat('e',64); validator_token_hash := encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO invitation_id FROM public.create_family_team_invitation(validator_team_id,recipient_email,validator_token_hash) AS created; EXECUTE 'RESET ROLE';
-  PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT athlete_id INTO new_athlete_id FROM public.accept_family_team_invitation(token,NULL,'New','Child',2034); EXECUTE 'RESET ROLE';
+  EXECUTE 'SET LOCAL ROLE service_role'; SELECT athlete_id INTO new_athlete_id FROM public.server_accept_family_team_invitation(recipient_id,lower(btrim(recipient_email)),token,NULL,'New','Child',2034); EXECUTE 'RESET ROLE';
   IF NOT EXISTS (SELECT 1 FROM public.athletes AS a WHERE a.id=new_athlete_id AND a.first_name='New' AND a.last_name='Child' AND a.graduation_year=2034)
      OR NOT EXISTS (SELECT 1 FROM public.athlete_profile_relationships AS r WHERE r.athlete_id=new_athlete_id AND r.profile_id=recipient_id AND r.role='guardian' AND r.training_permission AND r.manage_permission)
      OR NOT EXISTS (SELECT 1 FROM public.team_athlete_memberships AS m WHERE m.team_id=validator_team_id AND m.athlete_id=new_athlete_id)
@@ -127,11 +143,11 @@ BEGIN
   IF NOT failed THEN RAISE EXCEPTION 'direct durable roster write was not denied'; END IF;
   SELECT count(*) INTO athletes_before FROM public.athletes; SELECT count(*) INTO relationships_before FROM public.athlete_profile_relationships; SELECT count(*) INTO rosters_before FROM public.team_athlete_memberships;
   token:=repeat('g',64); validator_token_hash:=encode(extensions.digest(token,'sha256'),'hex'); PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO invitation_id FROM public.create_family_team_invitation(validator_team_id,recipient_email,validator_token_hash) AS created; EXECUTE 'RESET ROLE';
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_family_team_invitation(token,NULL,'Rollback',NULL,2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_family_team_invitation(recipient_id,lower(btrim(recipient_email)),token,NULL,'Rollback',NULL,2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed OR (SELECT count(*) FROM public.athletes)<>athletes_before OR (SELECT count(*) FROM public.athlete_profile_relationships)<>relationships_before OR (SELECT count(*) FROM public.team_athlete_memberships)<>rosters_before OR (SELECT i.status FROM public.family_team_invitations AS i WHERE i.id=invitation_id)<>'pending' THEN RAISE EXCEPTION 'failed acceptance did not roll back'; END IF;
   -- The same pending rollback fixture independently proves that later inviter-authority loss blocks acceptance.
   DELETE FROM public.team_memberships AS m WHERE m.team_id=validator_team_id AND m.user_id=manager_id;
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_family_team_invitation(token,NULL,'Authority','Lost',2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_family_team_invitation(recipient_id,lower(btrim(recipient_email)),token,NULL,'Authority','Lost',2034); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'inviter authority loss did not block acceptance'; END IF;
 END;
 $validation$;

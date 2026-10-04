@@ -10,17 +10,18 @@ DECLARE
   staff_team_id uuid;
   v_invitation_id uuid; base_invitation_id uuid; expired_invitation_id uuid; token text; v_token_hash text; result_athlete_id uuid; failed boolean; error_message text;
   original_manage boolean; original_training boolean;
-  recipient_confirmed_at timestamptz;
-  manager_email text; recipient_email text; view_email text;
+  manager_email text; recipient_email text; unrelated_email text; view_email text;
 BEGIN
   -- Catalog and grant contract checks run before transactional fixtures.
   IF NOT EXISTS (SELECT 1 FROM pg_class AS class JOIN pg_namespace AS namespace ON namespace.oid=class.relnamespace WHERE namespace.nspname='public' AND class.relname='guardian_invitations' AND class.relrowsecurity) THEN RAISE EXCEPTION 'guardian invitation table/RLS is missing'; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname IN ('guardian_invitations_email_normalized','guardian_invitations_token_hash_sha256','guardian_invitations_expiry_after_creation','guardian_invitations_lifecycle_consistent') GROUP BY conrelid HAVING count(*)=4) THEN RAISE EXCEPTION 'guardian invitation constraints are incomplete'; END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND tablename='guardian_invitations' AND indexname='guardian_invitations_one_pending_per_email') THEN RAISE EXCEPTION 'guardian invitation pending uniqueness index is missing'; END IF;
   IF has_table_privilege('authenticated','public.guardian_invitations','INSERT') OR has_table_privilege('authenticated','public.guardian_invitations','UPDATE') OR has_table_privilege('authenticated','public.guardian_invitations','DELETE') OR has_table_privilege('authenticated','public.guardian_invitations','SELECT') THEN RAISE EXCEPTION 'authenticated has direct guardian invitation table access'; END IF;
-  IF to_regprocedure('public.create_guardian_invitation(uuid,text,text,timestamptz)') IS NULL OR to_regprocedure('public.get_guardian_invitation_summary(text)') IS NULL OR to_regprocedure('public.accept_guardian_invitation(text)') IS NULL OR to_regprocedure('public.revoke_guardian_invitation(uuid)') IS NULL OR to_regprocedure('public.list_my_guardian_invitations(uuid)') IS NULL THEN RAISE EXCEPTION 'guardian invitation function signatures are incomplete'; END IF;
+  IF to_regprocedure('public.create_guardian_invitation(uuid,text,text,timestamptz)') IS NULL OR to_regprocedure('public.get_guardian_invitation_summary(text)') IS NULL OR to_regprocedure('public.accept_guardian_invitation(text)') IS NULL OR to_regprocedure('public.revoke_guardian_invitation(uuid)') IS NULL OR to_regprocedure('public.list_my_guardian_invitations(uuid)') IS NULL OR to_regprocedure('public.server_get_guardian_invitation_summary(uuid,text,text)') IS NULL OR to_regprocedure('public.server_accept_guardian_invitation(uuid,text,text)') IS NULL THEN RAISE EXCEPTION 'guardian invitation function signatures are incomplete'; END IF;
   IF EXISTS (SELECT 1 FROM pg_proc AS procedure JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace WHERE namespace.nspname='public' AND procedure.proname IN ('create_guardian_invitation','get_guardian_invitation_summary','accept_guardian_invitation','revoke_guardian_invitation','list_my_guardian_invitations') AND (NOT procedure.prosecdef OR NOT (coalesce(procedure.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=""']::text[]))) THEN RAISE EXCEPTION 'guardian invitation function hardening is incomplete'; END IF;
-  IF EXISTS (SELECT 1 FROM pg_proc AS procedure JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace WHERE namespace.nspname='public' AND procedure.proname IN ('create_guardian_invitation','get_guardian_invitation_summary','accept_guardian_invitation','revoke_guardian_invitation','list_my_guardian_invitations') AND (NOT has_function_privilege('authenticated',procedure.oid,'EXECUTE') OR has_function_privilege('anon',procedure.oid,'EXECUTE'))) THEN RAISE EXCEPTION 'guardian invitation function grants are incorrect'; END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc AS procedure JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace WHERE namespace.nspname='public' AND procedure.proname IN ('create_guardian_invitation','revoke_guardian_invitation','list_my_guardian_invitations') AND (NOT has_function_privilege('authenticated',procedure.oid,'EXECUTE') OR has_function_privilege('anon',procedure.oid,'EXECUTE'))) THEN RAISE EXCEPTION 'authenticated guardian operation grants are incorrect'; END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc AS procedure JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace WHERE namespace.nspname='public' AND procedure.proname IN ('get_guardian_invitation_summary','accept_guardian_invitation') AND (has_function_privilege('authenticated',procedure.oid,'EXECUTE') OR has_function_privilege('anon',procedure.oid,'EXECUTE'))) THEN RAISE EXCEPTION 'recipient guardian operation grants are incorrect'; END IF;
+  IF EXISTS (SELECT 1 FROM pg_proc AS procedure JOIN pg_namespace AS namespace ON namespace.oid=procedure.pronamespace WHERE namespace.nspname='public' AND procedure.proname IN ('server_get_guardian_invitation_summary','server_accept_guardian_invitation') AND (NOT procedure.prosecdef OR NOT (coalesce(procedure.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=""']::text[]) OR NOT has_function_privilege('service_role',procedure.oid,'EXECUTE') OR has_function_privilege('authenticated',procedure.oid,'EXECUTE') OR has_function_privilege('anon',procedure.oid,'EXECUTE'))) THEN RAISE EXCEPTION 'server-mediated guardian operation grants are incorrect'; END IF;
   SELECT p.id INTO manager_id FROM public.profiles AS p JOIN auth.users AS u ON u.id=p.id
     WHERE u.email_confirmed_at IS NOT NULL AND u.email IS NOT NULL
       AND lower(btrim(u.email)) ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
@@ -29,7 +30,7 @@ BEGIN
     WHERE p.id <> manager_id AND u.email_confirmed_at IS NOT NULL AND u.email IS NOT NULL
       AND lower(btrim(u.email)) ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$'
     ORDER BY p.id LIMIT 1;
-  SELECT p.id INTO unrelated_id FROM public.profiles AS p JOIN auth.users AS u ON u.id=p.id
+  SELECT p.id, lower(btrim(u.email)) INTO unrelated_id, unrelated_email FROM public.profiles AS p JOIN auth.users AS u ON u.id=p.id
     WHERE p.id NOT IN (manager_id, recipient_id) AND u.email_confirmed_at IS NOT NULL AND u.email IS NOT NULL
       AND lower(btrim(u.email)) ~ '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' AND NOT private.is_admin(p.id)
     ORDER BY p.id LIMIT 1;
@@ -42,7 +43,6 @@ BEGIN
   IF manager_id IS NULL OR recipient_id IS NULL OR unrelated_id IS NULL OR view_id IS NULL OR act_only_id IS NULL THEN
     RAISE EXCEPTION 'Validator fixture error: requires five confirmed auth-backed profiles';
   END IF;
-  SELECT email_confirmed_at INTO recipient_confirmed_at FROM auth.users WHERE id=recipient_id;
   SELECT lower(btrim(email)) INTO manager_email FROM auth.users WHERE id=manager_id;
   SELECT lower(btrim(email)) INTO recipient_email FROM auth.users WHERE id=recipient_id;
   SELECT lower(btrim(email)) INTO view_email FROM auth.users WHERE id=view_id;
@@ -97,7 +97,7 @@ BEGIN
     IF NOT failed THEN RAISE EXCEPTION 'VIEW-only, ACT-only, staff-only, or unrelated actor created guardian invitation'; END IF;
   END LOOP;
   failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
-    PERFORM public.create_guardian_invitation(v_athlete_id,manager_email,repeat('c',64)); EXECUTE 'RESET ROLE';
+    PERFORM public.create_guardian_invitation(v_athlete_id,upper(manager_email),repeat('c',64)); EXECUTE 'RESET ROLE';
   EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'own-email guardian invitation was accepted'; END IF;
   failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
@@ -117,30 +117,46 @@ BEGIN
   EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'malformed guardian invitation token hash was accepted'; END IF;
 
-  -- Wrong/unverified accounts receive no minor identity through summary and cannot accept.
-  PERFORM set_config('request.jwt.claim.sub',unrelated_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
-  IF EXISTS (SELECT 1 FROM public.get_guardian_invitation_summary(token)) THEN RAISE EXCEPTION 'wrong account learned minor identity'; END IF;
-  failed:=false; BEGIN PERFORM public.accept_guardian_invitation(token); EXCEPTION WHEN others THEN failed:=true; END; EXECUTE 'RESET ROLE';
+  -- Boundary A: authenticated clients cannot call recipient-sensitive RPCs,
+  -- independently of invitation state.
+  failed:=false; BEGIN
+    PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
+    PERFORM public.get_guardian_invitation_summary(token);
+  EXCEPTION WHEN insufficient_privilege THEN failed:=true;
+  END; EXECUTE 'RESET ROLE';
+  IF NOT failed THEN RAISE EXCEPTION 'authenticated direct guardian summary was not denied'; END IF;
+  failed:=false; BEGIN
+    PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
+    PERFORM public.accept_guardian_invitation(token);
+  EXCEPTION WHEN insufficient_privilege THEN failed:=true;
+  END; EXECUTE 'RESET ROLE';
+  IF NOT failed THEN RAISE EXCEPTION 'authenticated direct guardian acceptance was not denied'; END IF;
+
+  -- Boundary B assumes the server has already verified Auth and supplies the
+  -- fixture-specific trusted ID/email. It tests database authorization and
+  -- transactions, not GoTrue verification.
+  -- Wrong identities receive no minor identity through summary and cannot accept.
+  EXECUTE 'SET LOCAL ROLE service_role';
+  IF EXISTS (SELECT 1 FROM public.server_get_guardian_invitation_summary(unrelated_id,unrelated_email,token)) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'wrong account learned minor identity'; END IF;
+  failed:=false; BEGIN PERFORM public.server_accept_guardian_invitation(unrelated_id,unrelated_email,token); EXCEPTION WHEN others THEN failed:=true; END; EXECUTE 'RESET ROLE';
   IF NOT failed THEN RAISE EXCEPTION 'wrong account accepted guardian invitation'; END IF;
-  UPDATE auth.users SET email_confirmed_at=NULL WHERE id=recipient_id;
-  PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
-  IF EXISTS (SELECT 1 FROM public.get_guardian_invitation_summary(token)) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'unverified account learned minor identity'; END IF;
-  failed:=false; BEGIN PERFORM public.accept_guardian_invitation(token); EXCEPTION WHEN others THEN failed:=true; END; EXECUTE 'RESET ROLE';
-  UPDATE auth.users SET email_confirmed_at=recipient_confirmed_at WHERE id=recipient_id;
-  IF NOT failed THEN RAISE EXCEPTION 'unverified account accepted guardian invitation'; END IF;
-  PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
-  IF NOT EXISTS (SELECT 1 FROM public.get_guardian_invitation_summary(token)) THEN RAISE EXCEPTION 'matching verified recipient did not receive minimal summary'; END IF;
-  SELECT accepted.athlete_id INTO result_athlete_id FROM public.accept_guardian_invitation(token) AS accepted; EXECUTE 'RESET ROLE';
+  EXECUTE 'SET LOCAL ROLE service_role';
+  IF EXISTS (SELECT 1 FROM public.server_get_guardian_invitation_summary(recipient_id,unrelated_email,token)) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'nonmatching trusted identity learned minor identity'; END IF;
+  failed:=false; BEGIN PERFORM public.server_accept_guardian_invitation(recipient_id,unrelated_email,token); EXCEPTION WHEN others THEN failed:=true; END; EXECUTE 'RESET ROLE';
+  IF NOT failed THEN RAISE EXCEPTION 'nonmatching trusted identity accepted guardian invitation'; END IF;
+  EXECUTE 'SET LOCAL ROLE service_role';
+  IF NOT EXISTS (SELECT 1 FROM public.server_get_guardian_invitation_summary(recipient_id,recipient_email,token)) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'matching verified recipient did not receive minimal summary'; END IF;
+  SELECT accepted.athlete_id INTO result_athlete_id FROM public.server_accept_guardian_invitation(recipient_id,recipient_email,token) AS accepted; EXECUTE 'RESET ROLE';
   IF result_athlete_id IS DISTINCT FROM v_athlete_id OR NOT EXISTS (
     SELECT 1 FROM public.athlete_profile_relationships AS r WHERE r.athlete_id=v_athlete_id AND r.profile_id=recipient_id
       AND r.role='guardian' AND NOT r.manage_permission AND NOT r.training_permission AND r.revoked_at IS NULL
   ) THEN RAISE EXCEPTION 'fixed VIEW-only guardian grant was not created'; END IF;
   IF (SELECT invitation.status FROM public.guardian_invitations AS invitation WHERE invitation.id=base_invitation_id) <> 'accepted' THEN RAISE EXCEPTION 'acceptance audit/lifecycle failed'; END IF;
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'accepted guardian invitation replay succeeded'; END IF;
   token:=repeat('r',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(v_athlete_id,recipient_email,v_token_hash) AS created; EXECUTE 'RESET ROLE';
-  PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE';
+  EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE';
   IF (SELECT count(*) FROM public.athlete_profile_relationships AS relationship WHERE relationship.athlete_id=v_athlete_id AND relationship.profile_id=recipient_id AND relationship.role='guardian' AND relationship.revoked_at IS NULL) <> 1 THEN
     RAISE EXCEPTION 'existing VIEW guardian acceptance was not idempotent';
   END IF;
@@ -154,13 +170,13 @@ BEGIN
   token:=repeat('d',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   SELECT relationship.manage_permission, relationship.training_permission INTO original_manage,original_training FROM public.athlete_profile_relationships AS relationship WHERE relationship.athlete_id=strong_athlete_id AND relationship.profile_id=recipient_id AND relationship.role='guardian';
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(strong_athlete_id,recipient_email,v_token_hash) AS created; EXECUTE 'RESET ROLE';
-  PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE';
+  EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE';
   IF NOT EXISTS (SELECT 1 FROM public.athlete_profile_relationships AS relationship WHERE relationship.athlete_id=strong_athlete_id AND relationship.profile_id=recipient_id AND relationship.role='guardian' AND relationship.manage_permission=original_manage AND relationship.training_permission=original_training) THEN RAISE EXCEPTION 'stronger guardian was downgraded or changed'; END IF;
 
   -- A revoked historical guardian gains a new active fixed grant; self never converts.
   token:=repeat('e',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(revoked_athlete_id,recipient_email,v_token_hash) AS created; EXECUTE 'RESET ROLE';
-  PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE';
+  EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE';
   IF (SELECT count(*) FROM public.athlete_profile_relationships AS relationship WHERE relationship.athlete_id=revoked_athlete_id AND relationship.profile_id=recipient_id AND relationship.role='guardian') <> 2 THEN RAISE EXCEPTION 'revoked guardian history was not preserved'; END IF;
   token:=repeat('f',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(self_athlete_id,recipient_email,v_token_hash) AS created; EXECUTE 'RESET ROLE';
@@ -172,37 +188,37 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.list_my_guardian_invitations(self_athlete_id)) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'self MANAGE relationship listed guardian invitations'; END IF;
   failed:=false; BEGIN PERFORM public.revoke_guardian_invitation(v_invitation_id); EXCEPTION WHEN others THEN failed:=true; END; EXECUTE 'RESET ROLE';
   IF NOT failed THEN RAISE EXCEPTION 'self MANAGE relationship revoked guardian invitation'; END IF;
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'self relationship was converted to guardian'; END IF;
   token:=repeat('n',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   INSERT INTO public.guardian_invitations(athlete_id, invited_email, inviter_profile_id, token_hash, expires_at)
   VALUES (self_athlete_id, view_email, recipient_id, v_token_hash, CURRENT_TIMESTAMP + interval '1 day');
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',view_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(view_id,view_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'self-based inviter authority accepted guardian invitation'; END IF;
 
   token:=repeat('u',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(inactive_athlete_id,recipient_email,v_token_hash) AS created; EXECUTE 'RESET ROLE';
   UPDATE public.athletes AS athlete SET status='archived', archived_at=clock_timestamp() WHERE athlete.id=inactive_athlete_id;
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'inactive athlete guardian invitation accepted'; END IF;
 
   -- Revocation and loss of inviter MANAGE authority both fail closed without changing guardian access.
   token:=repeat('g',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(authority_loss_athlete_id,recipient_email,v_token_hash) AS created; PERFORM public.revoke_guardian_invitation(v_invitation_id); EXECUTE 'RESET ROLE';
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'revoked guardian invitation accepted'; END IF;
   token:=repeat('i',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO expired_invitation_id FROM public.create_guardian_invitation(authority_loss_athlete_id,recipient_email,v_token_hash,clock_timestamp()+interval '1 second') AS created;
   failed:=false; BEGIN PERFORM public.create_guardian_invitation(authority_loss_athlete_id,recipient_email,repeat('j',64)); EXCEPTION WHEN others THEN failed:=true; END; EXECUTE 'RESET ROLE';
   IF NOT failed THEN RAISE EXCEPTION 'duplicate live guardian invitation was accepted'; END IF;
   PERFORM pg_sleep(1.1);
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'expired guardian invitation accepted'; END IF;
   token:=repeat('h',64); v_token_hash:=encode(extensions.digest(token,'sha256'),'hex');
   PERFORM set_config('request.jwt.claim.sub',manager_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; SELECT created.invitation_id INTO v_invitation_id FROM public.create_guardian_invitation(authority_loss_athlete_id,recipient_email,v_token_hash) AS created; EXECUTE 'RESET ROLE';
   IF (SELECT invitation.status FROM public.guardian_invitations AS invitation WHERE invitation.id=expired_invitation_id) <> 'expired' THEN RAISE EXCEPTION 'stale guardian invitation was not expired before replacement'; END IF;
   UPDATE public.athlete_profile_relationships AS relationship SET revoked_at=clock_timestamp() WHERE relationship.athlete_id=authority_loss_athlete_id AND relationship.profile_id=manager_id AND relationship.role='guardian' AND relationship.revoked_at IS NULL;
-  failed:=false; BEGIN PERFORM set_config('request.jwt.claim.sub',recipient_id::text,true); EXECUTE 'SET LOCAL ROLE authenticated'; PERFORM public.accept_guardian_invitation(token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
+  failed:=false; BEGIN EXECUTE 'SET LOCAL ROLE service_role'; PERFORM public.server_accept_guardian_invitation(recipient_id,recipient_email,token); EXECUTE 'RESET ROLE'; EXCEPTION WHEN others THEN EXECUTE 'RESET ROLE'; failed:=true; END;
   IF NOT failed THEN RAISE EXCEPTION 'inviter authority loss did not block guardian acceptance'; END IF;
 
   -- Direct table/relationship writes are denied, and invitation revocation never revokes guardian access.

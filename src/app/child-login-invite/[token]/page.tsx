@@ -4,7 +4,8 @@ import ChildLoginInvitationAcceptanceForm from "@/components/child-login-invitat
 import RosterActionForm from "@/components/roster-action-form";
 import { authPath } from "@/lib/auth-continuation";
 import { childLoginInvitationLoginPath, childLoginInvitationPath, childLoginInvitationStatus, isChildLoginInvitationToken, parseChildLoginInvitationSummary, type ChildLoginInvitationSummary } from "@/lib/child-login-invitations";
-import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 import { acceptChildLoginInvitation, switchChildLoginInvitationAccount } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -38,15 +39,13 @@ function SignedOutInvitation({ token }: { token: string }) {
 export default async function ChildLoginInvitationPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!isChildLoginInvitationToken(token)) return <UnavailableInvitation message="This invitation is unavailable." />;
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) return <SignedOutInvitation token={token} />;
-  if (!user.email_confirmed_at) return <UnavailableInvitation message="Confirm your email address before continuing." token={token} />;
+  const identity = await getCurrentVerifiedAuthIdentity();
+  if (!identity) return <SignedOutInvitation token={token} />;
 
   let summary: ChildLoginInvitationSummary | null = null;
   let uncertain = false;
   try {
-    const { data, error } = await supabase.rpc("get_child_login_invitation_summary", { p_invitation_token: token });
+    const { data, error } = await createServiceClient().rpc("server_get_child_login_invitation_summary", { p_auth_user_id: identity.authUserId, p_verified_email: identity.verifiedEmail, p_invitation_token: token });
     const parsed = error ? { kind: "malformed" as const } : parseChildLoginInvitationSummary(data);
     if (parsed.kind === "malformed") uncertain = true;
     else if (parsed.kind === "summary") summary = parsed.value;

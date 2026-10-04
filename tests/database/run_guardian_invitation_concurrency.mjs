@@ -11,7 +11,7 @@ const PROJECT_REF = "bikkjyvoldegbltragzn";
 const LEDGER_VERSION = "20260922194927";
 const MIGRATION = "20260922194927_create_guardian_invitation_foundation.sql";
 const MIGRATION_SHA = "979182041e92d1cd0b19c83adb379248aca14347c3593278b0984d1d7d449686";
-const ACCEPTANCE_FINGERPRINT = "4655b58fc53fa98140c36023340e103096bafacf479658fa97919bf61f94f58d";
+const ACCEPTANCE_FINGERPRINT = "79b35b5baa899577454b6f2160d4f0743e3e254d52bbeb8294f9f09b848eeb3b";
 const DEADLINE_MS = 15_000;
 const POLL_MS = 75;
 const INJECT_STAGE = process.env.TILT_GUARDIAN_CONCURRENCY_INJECT_STAGE;
@@ -26,7 +26,9 @@ export function validateLocalDatabaseUrl(value) {
   if (!value) fail("MISSING_LOCAL_DATABASE_URL");
   let url; try { url = new URL(value); } catch { fail("INVALID_LOCAL_DATABASE_URL"); }
   if (!/^(postgres|postgresql):$/.test(url.protocol) || !url.password || url.pathname !== "/postgres" || url.search) fail("INVALID_LOCAL_DATABASE_URL");
-  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname.toLowerCase()) || url.port !== "54322") fail("NON_LOOPBACK_TARGET");
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(url.hostname.toLowerCase())) fail("NON_LOOPBACK_TARGET");
+  if (url.port === "54322") fail("PROTECTED_TARGET_REFUSED");
+  if (!url.port) fail("DISPOSABLE_TARGET_REQUIRED");
   return url.toString();
 }
 export function validateLiveDatabaseUrl(value) {
@@ -89,7 +91,7 @@ async function waitForBlocking(observer, blockerPid, blockedPid) {
 }
 async function ledger(observer) {
   const row = await queryOne(observer, "SELECT count(*)::int AS count, array_agg(version ORDER BY version) AS versions FROM supabase_migrations.schema_migrations");
-  if (row.versions.at(-1) !== LEDGER_VERSION || row.versions.filter((version) => version === LEDGER_VERSION).length !== 1) fail("LEDGER_CONTRACT_MISMATCH");
+  if (row.versions.filter((version) => version === LEDGER_VERSION).length !== 1) fail("LEDGER_CONTRACT_MISMATCH");
   return JSON.stringify(row);
 }
 export function guardianTableAclIsRestricted(contract) {
@@ -98,8 +100,8 @@ export function guardianTableAclIsRestricted(contract) {
 async function preflight(observer, clients) {
   const migrationPath = fileURLToPath(new URL(`../../supabase/migrations/${MIGRATION}`, import.meta.url));
   if (createHash("sha256").update(readFileSync(migrationPath)).digest("hex") !== MIGRATION_SHA) fail("MIGRATION_SHA_MISMATCH");
-  const contract = await queryOne(observer, "SELECT (SELECT relrowsecurity FROM pg_class WHERE oid='public.guardian_invitations'::regclass) AS rls, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'SELECT') AS direct_select_denied, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'INSERT') AS direct_insert_denied, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'UPDATE') AS direct_update_denied, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'DELETE') AS direct_delete_denied, (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('create_guardian_invitation','accept_guardian_invitation') AND p.prosecdef AND coalesce(p.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=\"\"']::text[]) AS hardened, to_regprocedure('public.accept_guardian_invitation(text)') IS NOT NULL AS acceptance, to_regprocedure('public.create_guardian_invitation(uuid,text,text,timestamptz)') IS NOT NULL AS creator, to_regclass('public.guardian_invitations_one_pending_per_email') IS NOT NULL AS pending_unique, to_regclass('public.athlete_profile_relationships_active_role_unique') IS NOT NULL AS relationship_unique, (SELECT has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('public', p.oid, 'EXECUTE') AND encode(extensions.digest(pg_get_functiondef(p.oid), 'sha256'), 'hex')=$1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='accept_guardian_invitation' AND p.proargtypes='25'::oidvector) AS acceptance_fingerprint", [ACCEPTANCE_FINGERPRINT]);
-  if (!guardianTableAclIsRestricted(contract) || Number(contract.hardened) !== 2 || !contract.acceptance || !contract.creator || !contract.pending_unique || !contract.relationship_unique || !contract.acceptance_fingerprint) fail("GUARDIAN_CONTRACT_MISMATCH");
+  const contract = await queryOne(observer, "SELECT (SELECT relrowsecurity FROM pg_class WHERE oid='public.guardian_invitations'::regclass) AS rls, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'SELECT') AS direct_select_denied, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'INSERT') AS direct_insert_denied, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'UPDATE') AS direct_update_denied, NOT has_table_privilege('authenticated', 'public.guardian_invitations', 'DELETE') AS direct_delete_denied, (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname IN ('create_guardian_invitation','accept_guardian_invitation') AND p.prosecdef AND coalesce(p.proconfig, ARRAY[]::text[]) @> ARRAY['search_path=\"\"']::text[]) AS hardened, to_regprocedure('public.accept_guardian_invitation(text)') IS NOT NULL AS acceptance, to_regprocedure('public.server_accept_guardian_invitation(uuid,text,text)') IS NOT NULL AS server_acceptance, to_regprocedure('public.create_guardian_invitation(uuid,text,text,timestamptz)') IS NOT NULL AS creator, to_regclass('public.guardian_invitations_one_pending_per_email') IS NOT NULL AS pending_unique, to_regclass('public.athlete_profile_relationships_active_role_unique') IS NOT NULL AS relationship_unique, (SELECT NOT has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('public', p.oid, 'EXECUTE') AND encode(extensions.digest(pg_get_functiondef(p.oid), 'sha256'), 'hex')=$1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.proname='accept_guardian_invitation' AND p.proargtypes='25'::oidvector) AS acceptance_fingerprint, has_function_privilege('service_role','public.server_accept_guardian_invitation(uuid,text,text)'::regprocedure,'EXECUTE') AND NOT has_function_privilege('authenticated','public.server_accept_guardian_invitation(uuid,text,text)'::regprocedure,'EXECUTE') AND NOT has_function_privilege('anon','public.server_accept_guardian_invitation(uuid,text,text)'::regprocedure,'EXECUTE') AS server_acceptance_acl", [ACCEPTANCE_FINGERPRINT]);
+  if (!guardianTableAclIsRestricted(contract) || Number(contract.hardened) !== 2 || !contract.acceptance || !contract.server_acceptance || !contract.creator || !contract.pending_unique || !contract.relationship_unique || !contract.acceptance_fingerprint || !contract.server_acceptance_acl) fail("GUARDIAN_CONTRACT_MISMATCH");
   const pids = await Promise.all(clients.map(pid));
   if (new Set(pids).size !== clients.length) fail("NON_DISTINCT_BACKEND_PIDS");
   return { ledger: await ledger(observer), pids };
@@ -167,7 +169,7 @@ async function cleanup(control, f) {
     throw error;
   }
 }
-async function accept(client, recipient, invitation) { await beginActor(client, recipient.id); return client.query("SELECT * FROM public.accept_guardian_invitation($1)", [invitation.token]); }
+async function accept(client, recipient, invitation) { await beginActor(client, recipient.id); await client.query("SET LOCAL ROLE service_role"); let queryError; try { return await client.query("SELECT * FROM public.server_accept_guardian_invitation($1,$2,$3)", [recipient.id, recipient.email.trim().toLowerCase(), invitation.token]); } catch (error) { queryError = error; throw error; } finally { try { await client.query("RESET ROLE"); } catch (resetError) { if (!queryError) throw resetError; } } }
 async function relationshipCount(observer, athlete, recipient) { return Number((await queryOne(observer, "SELECT count(*) AS count FROM public.athlete_profile_relationships WHERE athlete_id=$1 AND profile_id=$2 AND role='guardian' AND revoked_at IS NULL AND NOT manage_permission AND NOT training_permission", [athlete.id, recipient.id])).count); }
 async function invitationStatus(observer, invitation) { return (await queryOne(observer, "SELECT status FROM public.guardian_invitations WHERE id=$1", [invitation.id])).status; }
 async function scenarioSame(a, b, observer, control, pids) {
@@ -198,7 +200,7 @@ async function scenarioAuthority(a, b, observer, control, pids) {
     const x = await setup(control, f); await b.query("BEGIN"); await b.query("UPDATE public.athlete_profile_relationships SET revoked_at=CURRENT_TIMESTAMP WHERE id=$1", [x.athlete.relationshipId]); const pending = accept(a, x.recipients[0], x.invitations[0]); const second = await waitForBlocking(observer, pids[1], pids[0]); await b.query("COMMIT"); await expectFailure(a, pending, "Inviter no longer has guardian permission to share access"); if (await relationshipCount(observer, x.athlete, x.recipients[0]) !== 0 || await invitationStatus(observer, x.invitations[0]) !== "pending") fail("AUTHORITY_LOSS_FINAL_STATE"); report("scenario_3b_authority_first", `PASS blocked=${second.wait_event_type ?? "unknown"}`);
   } finally { await rollback(a); await rollback(b); await cleanup(control, f); }
   f = fixture(`guardian-concurrency-${randomUUID()}`); try {
-    const x = await setup(control, f); await control.query("UPDATE public.athlete_profile_relationships SET manage_permission=false WHERE id=$1", [x.athlete.relationshipId]); await beginActor(a, x.recipients[0].id); await expectFailure(a, a.query("SELECT * FROM public.accept_guardian_invitation($1)", [x.invitations[0].token]), "Inviter no longer has guardian permission to share access"); if (await relationshipCount(observer, x.athlete, x.recipients[0]) !== 0 || await invitationStatus(observer, x.invitations[0]) !== "pending") fail("MANAGE_LOSS_FINAL_STATE"); report("authority_variant_manage_false", "PASS");
+    const x = await setup(control, f); await control.query("UPDATE public.athlete_profile_relationships SET manage_permission=false WHERE id=$1", [x.athlete.relationshipId]); await expectFailure(a, accept(a, x.recipients[0], x.invitations[0]), "Inviter no longer has guardian permission to share access"); if (await relationshipCount(observer, x.athlete, x.recipients[0]) !== 0 || await invitationStatus(observer, x.invitations[0]) !== "pending") fail("MANAGE_LOSS_FINAL_STATE"); report("authority_variant_manage_false", "PASS");
   } finally { await rollback(a); await rollback(b); await cleanup(control, f); }
 }
 async function scenarioArchive(a, b, observer, control, pids) {
@@ -212,6 +214,7 @@ async function scenarioArchive(a, b, observer, control, pids) {
 async function close(client) { try { await client.end(); } catch { try { client.connection?.stream?.destroy(); } catch {} } }
 async function main() {
   const mode = validateMode(process.env[MODE_ENV]); const connection = connectionConfig(mode, process.env[DATABASE_URL_ENV], process.env[CA_CERT_PATH_ENV]);
+  if (mode === "LOCAL") { const target = new URL(connection.connectionString); report("target", `${target.hostname}:${target.port}${target.pathname}`); }
   const clients = ["A", "B", "observer", "cleanup"].map((name) => new Client({ ...connection, application_name: `tilt-guardian-concurrency-${name}`, connectionTimeoutMillis: DEADLINE_MS }));
   const [a, b, observer, control] = clients; let before;
   try {

@@ -30,20 +30,26 @@ const invitations = load("src/lib/child-login-invitations.ts", {
 const pageSource = readFileSync(root + "src/app/child-login-invite/[token]/page.tsx", "utf8");
 const actionsSource = readFileSync(root + "src/app/child-login-invite/[token]/actions.ts", "utf8");
 
-function pageFixture({ user = { id: "recipient", email_confirmed_at: "2026-01-01T00:00:00Z" }, summary = { athlete_display_name: "Avery", expires_at: "2030-01-01T00:00:00Z", invitation_status: "pending" }, rpcError = false } = {}) {
+function pageFixture({ user = { id: "recipient", email: "recipient@example.test", email_confirmed_at: "2026-01-01T00:00:00Z" }, summary = { athlete_display_name: "Avery", expires_at: "2030-01-01T00:00:00Z", invitation_status: "pending" }, rpcError = false } = {}) {
   const calls = [];
+  const authClient = { auth: { getUser: async () => ({ data: { user }, error: null }) } };
   const client = {
-    auth: { getUser: async () => ({ data: { user }, error: null }) },
     rpc: async (name, args) => {
       calls.push({ name, args });
       return rpcError ? { data: null, error: { message: "unavailable" } } : { data: summary ? [summary] : [], error: null };
     },
   };
+  const verifiedAuthIdentity = load("src/lib/verified-auth-identity.ts", {
+    "server-only": {},
+    "@/lib/supabase/server": { createClient: async () => authClient },
+  });
   const page = load("src/app/child-login-invite/[token]/page.tsx", {
     "next/link": { default: (props) => React.createElement("a", props) },
     "@/components/roster-action-form": { default: ({ label }) => React.createElement("button", null, label) },
     "@/components/child-login-invitation-acceptance-form": { default: ({ label }) => React.createElement("button", null, label) },
-    "@/lib/supabase/server": { createClient: async () => client },
+    "@/lib/supabase/server": { createClient: async () => authClient },
+    "@/lib/supabase/service": { createServiceClient: () => client },
+    "@/lib/verified-auth-identity": verifiedAuthIdentity,
     "@/lib/auth-continuation": auth,
     "@/lib/child-login-invitations": invitations,
     "./actions": { acceptChildLoginInvitation: async () => ({ status: "idle", message: "" }), switchChildLoginInvitationAccount: async () => ({ status: "idle", message: "" }) },
@@ -76,9 +82,9 @@ test("signed-out child-login route preserves only the validated same-origin cont
 });
 
 test("unconfirmed and wrong-account paths disclose no athlete identity", async () => {
-  const unconfirmed = pageFixture({ user: { id: "recipient", email_confirmed_at: null } });
+  const unconfirmed = pageFixture({ user: { id: "recipient", email: "recipient@example.test", email_confirmed_at: null } });
   const unconfirmedMarkup = renderToStaticMarkup(await unconfirmed.page({ params: Promise.resolve({ token }) }));
-  assert.match(unconfirmedMarkup, /Confirm your email address/);
+  assert.match(unconfirmedMarkup, /Sign in or create an account to continue/);
   assert.doesNotMatch(unconfirmedMarkup, /Avery/);
   assert.deepEqual(unconfirmed.calls, []);
 
@@ -86,7 +92,7 @@ test("unconfirmed and wrong-account paths disclose no athlete identity", async (
   const wrongMarkup = renderToStaticMarkup(await wrong.page({ params: Promise.resolve({ token }) }));
   assert.match(wrongMarkup, /invitation is unavailable/i);
   assert.doesNotMatch(wrongMarkup, /Avery/);
-  assert.deepEqual(wrong.calls, [{ name: "get_child_login_invitation_summary", args: { p_invitation_token: token } }]);
+  assert.deepEqual(wrong.calls, [{ name: "server_get_child_login_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
 test("confirmed recipient renders only summary fields and supports safe accepted retry", async () => {
@@ -95,7 +101,7 @@ test("confirmed recipient renders only summary fields and supports safe accepted
     const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token }) }));
     assert.match(markup, /Avery/);
     assert.match(markup, status === "accepted" ? /Continue/ : /Claim child login/);
-    assert.deepEqual(calls, [{ name: "get_child_login_invitation_summary", args: { p_invitation_token: token } }]);
+    assert.deepEqual(calls, [{ name: "server_get_child_login_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
   }
 });
 
@@ -104,10 +110,12 @@ test("acceptance action gives the browser no identity authority and redirects on
   const actions = load("src/app/child-login-invite/[token]/actions.ts", {
     "next/navigation": { redirect: (destination) => { throw Error(`REDIRECT:${destination}`); } },
     "@/lib/child-login-invitations": invitations,
-    "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "recipient" } }, error: null }) }, rpc: async (name, args) => { calls.push({ name, args }); return { data: [{ athlete_id: athleteId }], error: null }; } }) },
+    "@/lib/supabase/server": { createClient: async () => ({}) },
+    "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async (name, args) => { calls.push({ name, args }); return { data: [{ athlete_id: athleteId }], error: null }; } }) },
+    "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "recipient", verifiedEmail: "recipient@example.test" }) },
   });
   await assert.rejects(actions.acceptChildLoginInvitation(token, { status: "idle", message: "" }, new FormData()), new RegExp(`REDIRECT:\\/\\?athlete=${athleteId}`));
-  assert.deepEqual(calls, [{ name: "accept_child_login_invitation", args: { p_invitation_token: token } }]);
+  assert.deepEqual(calls, [{ name: "server_accept_child_login_invitation", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
 test("acceptance maps rejected, transport, and malformed outcomes without inventing an athlete", async () => {
@@ -118,7 +126,9 @@ test("acceptance maps rejected, transport, and malformed outcomes without invent
     const actions = load("src/app/child-login-invite/[token]/actions.ts", {
       "next/navigation": { redirect: () => { throw Error("unexpected redirect"); } },
       "@/lib/child-login-invitations": invitations,
-      "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: { id: "recipient" } }, error: null }) }, rpc: async () => response }) },
+      "@/lib/supabase/server": { createClient: async () => ({}) },
+      "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async () => response }) },
+      "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "recipient", verifiedEmail: "recipient@example.test" }) },
     });
     const result = await actions.acceptChildLoginInvitation(token, { status: "idle", message: "" }, new FormData());
     assert.equal(result.status, response.error ? "error" : "review_required");
@@ -135,10 +145,9 @@ test("acceptance fails generically when the action-time session is absent or inv
     const actions = load("src/app/child-login-invite/[token]/actions.ts", {
       "next/navigation": { redirect: (destination) => { throw Error(`UNEXPECTED_REDIRECT:${destination}`); } },
       "@/lib/child-login-invitations": invitations,
-      "@/lib/supabase/server": { createClient: async () => ({
-        auth: { getUser: async () => authResult },
-        rpc: async (...args) => { calls.push(args); return { data: [{ athlete_id: athleteId }], error: null }; },
-      }) },
+      "@/lib/supabase/server": { createClient: async () => ({}) },
+      "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async (...args) => { calls.push(args); return { data: [{ athlete_id: athleteId }], error: null }; } }) },
+      "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => authResult.data.user ? { authUserId: authResult.data.user.id, verifiedEmail: "recipient@example.test" } : null },
     });
     const result = await actions.acceptChildLoginInvitation(token, { status: "idle", message: "" }, new FormData());
     assert.deepEqual(calls, []);
@@ -150,8 +159,8 @@ test("acceptance fails generically when the action-time session is absent or inv
 test("recipient implementation remains RPC-only, token-private, and dynamically rendered", () => {
   assert.match(pageSource, /export const dynamic = "force-dynamic"/);
   assert.match(pageSource, /export const revalidate = 0/);
-  assert.match(pageSource, /get_child_login_invitation_summary/);
-  assert.match(actionsSource, /accept_child_login_invitation", \{ p_invitation_token: token \}/);
+  assert.match(pageSource, /server_get_child_login_invitation_summary/);
+  assert.match(actionsSource, /server_accept_child_login_invitation/);
   assert.match(actionsSource, /parseChildLoginInvitationAcceptance/);
   assert.match(actionsSource, /redirect\(`\/\?athlete=\$\{encodeURIComponent\(acceptedAthleteId\)\}`\)/);
   for (const source of [pageSource, actionsSource]) {
