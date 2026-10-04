@@ -23,6 +23,7 @@ type Snapshot = {
   schema_version: number;
   step_count: number;
 };
+type PerformedVariant = { selected_variant: "assigned" | "challenge" };
 type Attempt = {
   workout_result_id: string | null;
   training_session_id: string;
@@ -44,6 +45,8 @@ type Session = {
   status: string;
   workouts: Related<Workout>;
   training_session_prescriptions: Related<Snapshot>;
+  training_session_challenge_prescriptions: Related<Snapshot>;
+  training_session_performed_variants: Related<PerformedVariant>;
   workout_results: Related<Result>;
   workout_session_attempts: Related<Attempt>;
 };
@@ -97,7 +100,7 @@ export async function loadTeamAttendance(teamId: string) {
     readAllRows<Session>((from, to) => supabase
       .from("training_sessions")
       .select(
-        "id,athlete_id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
+        "id,athlete_id,athlete_user_id,scheduled_date,status,workouts(name),training_session_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),training_session_challenge_prescriptions(workout_name,prescribed_work_ms,schema_version,step_count),training_session_performed_variants(selected_variant),workout_results(id,training_session_id,athlete_id,athlete_user_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,athlete_user_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
       .eq("team_id", teamId)
       .order("scheduled_date", { ascending: true })
@@ -123,7 +126,11 @@ export async function loadTeamAttendance(teamId: string) {
     // pre-family records whose durable owner was not materialized.
     const athleteId = session.athlete_id ?? session.athlete_user_id ?? "";
     const result = one(session.workout_results);
-    const snapshot = one(session.training_session_prescriptions);
+    const assignedSnapshot = one(session.training_session_prescriptions);
+    const challengeSnapshot = one(session.training_session_challenge_prescriptions);
+    const snapshot = one(session.training_session_performed_variants)?.selected_variant === "challenge"
+      ? challengeSnapshot
+      : assignedSnapshot;
     const workout = one(session.workouts);
     const attempts = Array.isArray(session.workout_session_attempts)
       ? session.workout_session_attempts

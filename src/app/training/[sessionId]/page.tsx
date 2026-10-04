@@ -164,13 +164,23 @@ export default async function TrainingSessionPage({
   }
 
   const liveSteps = (steps ?? []) as WorkoutStep[];
-  const { data: prescription, error: prescriptionError } = await supabase.from("training_session_prescriptions")
-    .select("workout_id,workout_name,schema_version,prescribed_work_ms,prescribed_rest_ms,prescribed_total_ms,step_count,steps")
+  const { data: selectedVariant } = await supabase.from("training_session_performed_variants")
+    .select("selected_variant").eq("session_id", session.id).single();
+  const selectedChallenge = selectedVariant?.selected_variant === "challenge";
+  const { data: prescription, error: prescriptionError } = await supabase.from(selectedChallenge ? "training_session_challenge_prescriptions" : "training_session_prescriptions")
+    .select(selectedChallenge
+      ? "source_workout_id,workout_name,schema_version,prescribed_work_ms,prescribed_rest_ms,prescribed_total_ms,step_count,steps"
+      : "workout_id,workout_name,schema_version,prescribed_work_ms,prescribed_rest_ms,prescribed_total_ms,step_count,steps")
     .eq("session_id", session.id).single();
   let prescribed;
+  const performedWorkoutId = selectedChallenge
+    ? (prescription as unknown as { source_workout_id?: string } | null)?.source_workout_id
+    : (prescription as { workout_id?: string } | null)?.workout_id;
   try {
     const videos = new Map(liveSteps.map((step) => [step.id, getOne(step.exercises)?.video_url ?? null]));
-    prescribed = prescriptionError || !prescription ? null : mapSessionPrescription(prescription as SessionPrescriptionRow, videos);
+    prescribed = prescriptionError || !prescription ? null : mapSessionPrescription((selectedChallenge
+      ? { ...(prescription as unknown as { source_workout_id: string }), workout_id: (prescription as unknown as { source_workout_id: string }).source_workout_id }
+      : prescription) as SessionPrescriptionRow, videos);
   } catch { prescribed = null; }
   const workoutSteps = prescribed?.steps ?? [];
   const familiarExerciseIds = session.athlete_id && prescribed
@@ -243,7 +253,7 @@ export default async function TrainingSessionPage({
   workoutName={prescribed?.workoutName ?? "Assigned Workout"}
   actorUserId={user.id}
   athleteId={session.athlete_id}
-  workoutId={prescription?.workout_id ?? session.workout_id}
+  workoutId={performedWorkoutId ?? session.workout_id}
   sessionId={session.id}
   steps={workoutSteps}
   familiarExerciseIds={familiarExerciseIds}

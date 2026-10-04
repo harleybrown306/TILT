@@ -66,6 +66,8 @@ type TrainingSession = {
   workout_results: Related<Result>;
   workout_session_attempts: Related<Attempt>;
   training_session_prescriptions: Related<Prescription>;
+  training_session_challenge_prescriptions: Related<Prescription>;
+  training_session_performed_variants: Related<{ selected_variant: "assigned" | "challenge" }>;
 };
 
 type TrainingSessionWithAdherence = TrainingSession & {
@@ -169,6 +171,13 @@ export default async function AthleteDetailPage({
       training_session_prescriptions (
         schema_version,
         step_count
+      ),
+      training_session_challenge_prescriptions (
+        schema_version,
+        step_count
+      ),
+      training_session_performed_variants (
+        selected_variant
       )
     `)
     .eq("team_id", teamId)
@@ -194,7 +203,9 @@ export default async function AthleteDetailPage({
   const athleteSessions: TrainingSessionWithAdherence[] = ((sessions ?? []) as TrainingSession[]).map((session) => {
     const sessionAthleteId = session.athlete_id ?? session.athlete_user_id ?? athleteId;
     const result = getOne(session.workout_results);
-    const prescription = getOne(session.training_session_prescriptions);
+    const prescription = getOne(session.training_session_performed_variants)?.selected_variant === "challenge"
+      ? getOne(session.training_session_challenge_prescriptions)
+      : getOne(session.training_session_prescriptions);
     const attempts = Array.isArray(session.workout_session_attempts)
       ? session.workout_session_attempts
       : session.workout_session_attempts

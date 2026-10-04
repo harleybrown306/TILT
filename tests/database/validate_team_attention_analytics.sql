@@ -17,6 +17,18 @@ DECLARE
   v_former uuid := gen_random_uuid();
   v_workout uuid;
   v_exercise uuid;
+  v_assigned_step uuid;
+  v_challenge_workout uuid;
+  v_challenge_exercise_one uuid;
+  v_challenge_exercise_two uuid;
+  v_challenge_step_one uuid;
+  v_challenge_step_two uuid;
+  v_challenge_plan uuid := gen_random_uuid();
+  v_challenge_plan_item uuid := gen_random_uuid();
+  v_challenge_session uuid := gen_random_uuid();
+  v_challenge_attempt uuid := gen_random_uuid();
+  v_unselected_challenge_session uuid := gen_random_uuid();
+  v_unselected_challenge_attempt uuid := gen_random_uuid();
   v_current_session uuid;
   v_current_result uuid;
   v_former_session uuid;
@@ -47,7 +59,7 @@ BEGIN
     RAISE EXCEPTION '14B2 attention RPC catalog or ACL contract is incorrect';
   END IF;
 
-  INSERT INTO auth.users(id,aud,role,email,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
+  INSERT INTO auth.users(id,aud,role,email,confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
   SELECT gen_random_uuid(),'authenticated','authenticated',v_marker || '-' || n || '@example.test',clock_timestamp(),'{}','{}',clock_timestamp(),clock_timestamp()
   FROM generate_series(1,6) n;
   SELECT id INTO v_manager FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-1@example.test');
@@ -68,7 +80,24 @@ BEGIN
   INSERT INTO public.exercises(name,owner_user_id) VALUES ('14B2 exercise',v_manager) RETURNING id INTO v_exercise;
   INSERT INTO public.workouts(name,owner_user_id) VALUES ('14B2 workout',v_manager) RETURNING id INTO v_workout;
   INSERT INTO public.workout_exercises(workout_id,exercise_id,position,duration_seconds,rest_seconds,exercise_snapshot)
-  VALUES (v_workout,v_exercise,0,60,0,jsonb_build_object('exercise_name','14B2 exercise'));
+  VALUES (v_workout,v_exercise,0,60,0,jsonb_build_object('exercise_name','14B2 exercise'))
+  RETURNING id INTO v_assigned_step;
+  INSERT INTO public.exercises(name,owner_user_id) VALUES ('14B2 Challenge one',v_manager)
+  RETURNING id INTO v_challenge_exercise_one;
+  INSERT INTO public.exercises(name,owner_user_id) VALUES ('14B2 Challenge two',v_manager)
+  RETURNING id INTO v_challenge_exercise_two;
+  INSERT INTO public.workouts(name,owner_user_id) VALUES ('14B2 Challenge workout',v_manager) RETURNING id INTO v_challenge_workout;
+  INSERT INTO public.workout_exercises(workout_id,exercise_id,position,duration_seconds,rest_seconds,exercise_snapshot)
+  VALUES (v_challenge_workout,v_challenge_exercise_one,0,90,0,jsonb_build_object('exercise_name','14B2 Challenge one'))
+  RETURNING id INTO v_challenge_step_one;
+  INSERT INTO public.workout_exercises(workout_id,exercise_id,position,duration_seconds,rest_seconds,exercise_snapshot)
+  VALUES (v_challenge_workout,v_challenge_exercise_two,1,90,0,jsonb_build_object('exercise_name','14B2 Challenge two'))
+  RETURNING id INTO v_challenge_step_two;
+  INSERT INTO public.training_plans(id,name,team_id,owner_user_id,status,kind,visibility)
+  VALUES (v_challenge_plan,'14B2 divergent Challenge plan',v_team,v_manager,'active','coach','private');
+  PERFORM set_config('request.jwt.claim.sub',v_manager::text,true);
+  INSERT INTO public.training_plan_items(id,training_plan_id,workout_id,challenge_workout_id,day_offset,position)
+  VALUES (v_challenge_plan_item,v_challenge_plan,v_workout,v_challenge_workout,0,0);
   INSERT INTO public.training_sessions(athlete_id,coach_user_id,team_id,workout_id,scheduled_date,status)
   VALUES (v_athlete,v_manager,v_team,v_workout,v_as_of - 1,'scheduled') RETURNING id INTO v_current_session;
   INSERT INTO public.training_sessions(athlete_id,coach_user_id,team_id,workout_id,scheduled_date,status)
@@ -103,6 +132,42 @@ BEGIN
   -- Result synchronization records the factual completion; cancellation is the
   -- later operational lifecycle state tested by this validator.
   UPDATE public.training_sessions SET status='cancelled' WHERE id=v_former_session;
+
+  -- A real divergent Challenge execution: Assigned is 60 seconds/one step;
+  -- Challenge is 180 seconds/two steps. Both results are canonicalized and
+  -- finalized through the normal Phase 18B execution boundary.
+  INSERT INTO public.training_sessions(id,plan_item_id,athlete_id,coach_user_id,team_id,workout_id,scheduled_date,status)
+  VALUES
+    (v_challenge_session,v_challenge_plan_item,v_athlete,v_manager,v_team,v_workout,v_as_of - 4,'scheduled'),
+    (v_unselected_challenge_session,v_challenge_plan_item,v_athlete,v_manager,v_team,v_workout,v_as_of - 5,'scheduled');
+  IF NOT EXISTS(SELECT 1 FROM private.resolve_training_session_performed_prescription(v_unselected_challenge_session) AS prescription WHERE prescription.selected_variant='assigned' AND prescription.prescribed_work_ms=60000 AND prescription.step_count=1) THEN
+    RAISE EXCEPTION '14B2 unselected Challenge fixture did not retain Assigned prescription';
+  END IF;
+  PERFORM set_config('request.jwt.claim.sub',v_self::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
+  PERFORM public.select_my_training_session_variant(v_challenge_session,'challenge');
+  INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,phase,elapsed_ms,occurred_at)
+  VALUES (gen_random_uuid(),v_challenge_session,v_challenge_attempt,0,'workout_started','ready',0,clock_timestamp());
+  PERFORM public.register_my_workout_session_attempt(v_challenge_attempt,v_challenge_session);
+  PERFORM public.complete_my_training_session(v_challenge_session);
+  INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,workout_exercise_id,step_position,phase,phase_duration_ms,phase_elapsed_ms,elapsed_ms,occurred_at)
+  VALUES
+    (gen_random_uuid(),v_challenge_session,v_challenge_attempt,1,'exercise_started',v_challenge_step_one,0,'work',90000,0,0,clock_timestamp()),
+    (gen_random_uuid(),v_challenge_session,v_challenge_attempt,2,'exercise_completed',v_challenge_step_one,0,'work',90000,90000,90000,clock_timestamp()),
+    (gen_random_uuid(),v_challenge_session,v_challenge_attempt,3,'exercise_started',v_challenge_step_two,1,'work',90000,0,90000,clock_timestamp()),
+    (gen_random_uuid(),v_challenge_session,v_challenge_attempt,4,'exercise_completed',v_challenge_step_two,1,'work',90000,90000,180000,clock_timestamp()),
+    (gen_random_uuid(),v_challenge_session,v_challenge_attempt,5,'workout_completed',NULL,NULL,'finished',NULL,NULL,180000,clock_timestamp());
+  PERFORM public.finalize_my_workout_session_attempt(v_challenge_attempt);
+  INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,phase,elapsed_ms,occurred_at)
+  VALUES (gen_random_uuid(),v_unselected_challenge_session,v_unselected_challenge_attempt,0,'workout_started','ready',0,clock_timestamp());
+  PERFORM public.register_my_workout_session_attempt(v_unselected_challenge_attempt,v_unselected_challenge_session);
+  PERFORM public.complete_my_training_session(v_unselected_challenge_session);
+  INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,workout_exercise_id,step_position,phase,phase_duration_ms,phase_elapsed_ms,elapsed_ms,occurred_at)
+  VALUES
+    (gen_random_uuid(),v_unselected_challenge_session,v_unselected_challenge_attempt,1,'exercise_started',v_assigned_step,0,'work',60000,0,0,clock_timestamp()),
+    (gen_random_uuid(),v_unselected_challenge_session,v_unselected_challenge_attempt,2,'exercise_completed',v_assigned_step,0,'work',60000,60000,60000,clock_timestamp()),
+    (gen_random_uuid(),v_unselected_challenge_session,v_unselected_challenge_attempt,3,'workout_completed',NULL,NULL,'finished',NULL,NULL,60000,clock_timestamp());
+  PERFORM public.finalize_my_workout_session_attempt(v_unselected_challenge_attempt);
+  EXECUTE 'RESET ROLE';
 
   PERFORM set_config('request.jwt.claim.sub',v_manager::text,true);
 
@@ -159,11 +224,13 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.workout_session_attempts WHERE training_session_id=v_current_session) THEN
     RAISE EXCEPTION '14B2 VIEW actor read an ACT-only attempt row';
   END IF;
-  IF (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team)) <> 8
+  IF (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team)) <> 10
      OR EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE as_of_date<>v_as_of)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session AND athlete_id=v_athlete AND has_canonical_completion)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_former_session AND athlete_id IS NULL AND is_cancelled AND has_canonical_completion)
      OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session AND adherence_completed_work_blocks=3 AND adherence_prescribed_work_blocks=5)
+     OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_challenge_session AND has_canonical_completion AND prescribed_work_ms=180000 AND adherence_completed_work_blocks=2 AND adherence_prescribed_work_blocks=2)
+     OR NOT EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_unselected_challenge_session AND has_canonical_completion AND prescribed_work_ms=60000 AND adherence_completed_work_blocks=1 AND adherence_prescribed_work_blocks=1)
      OR EXISTS (SELECT 1 FROM public.list_my_team_attention_sessions(v_team) WHERE (adherence_completed_work_blocks IS NULL) <> (adherence_prescribed_work_blocks IS NULL))
      OR (SELECT count(*) FROM public.list_my_team_attention_sessions(v_team) WHERE session_id=v_current_session) <> 1 THEN
     RAISE EXCEPTION '14B2 bounded identity, completion, cancellation, or N/A projection failed';

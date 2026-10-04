@@ -22,6 +22,7 @@ type Prescription = {
   prescribed_work_ms: number;
   step_count: number;
 };
+type PerformedVariant = { selected_variant: "assigned" | "challenge" };
 
 type Attempt = {
   workout_result_id: string | null;
@@ -41,6 +42,8 @@ type SessionRow = {
   scheduled_date: string;
   workout_results: Related<Result>;
   training_session_prescriptions: Related<Prescription>;
+  training_session_challenge_prescriptions: Related<Prescription>;
+  training_session_performed_variants: Related<PerformedVariant>;
   workout_session_attempts: Related<Attempt>;
 };
 
@@ -52,7 +55,9 @@ function one<T>(value: Related<T>): T | null {
 
 function mapSession(row: SessionRow): TrainingResumeSession {
   const result = one(row.workout_results);
-  const prescription = one(row.training_session_prescriptions);
+  const prescription = one(row.training_session_performed_variants)?.selected_variant === "challenge"
+    ? one(row.training_session_challenge_prescriptions)
+    : one(row.training_session_prescriptions);
   const attempts = Array.isArray(row.workout_session_attempts)
     ? row.workout_session_attempts
     : row.workout_session_attempts
@@ -105,7 +110,7 @@ export async function loadTrainingResumeForAthlete(athleteId: string): Promise<T
     const { data, error } = await supabase
       .from("training_sessions")
       .select(
-        "id,athlete_id,scheduled_date,workout_results(id,training_session_id,athlete_id),training_session_prescriptions(session_id,schema_version,prescribed_work_ms,step_count),workout_session_attempts(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)",
+        "id,athlete_id,scheduled_date,workout_results(id,training_session_id,athlete_id),training_session_prescriptions(session_id,schema_version,prescribed_work_ms,step_count),training_session_challenge_prescriptions(session_id,schema_version,prescribed_work_ms,step_count),training_session_performed_variants(selected_variant),workout_session_attempts(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)",
       )
       .eq("athlete_id", athleteId)
       .order("scheduled_date", { ascending: true })

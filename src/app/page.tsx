@@ -42,6 +42,7 @@ type Prescription = {
   schema_version: number;
   step_count: number;
 };
+type PerformedVariant = { selected_variant: "assigned" | "challenge" };
 type Attempt = {
   workout_result_id: string | null;
   training_session_id: string;
@@ -61,6 +62,8 @@ type SessionRow = {
   status: string;
   teams: Related<Team>;
   training_session_prescriptions: Related<Prescription>;
+  training_session_challenge_prescriptions: Related<Prescription>;
+  training_session_performed_variants: Related<PerformedVariant>;
   workout_results: Related<Result>;
   workout_session_attempts: Related<Attempt>;
 };
@@ -200,7 +203,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
     activeContext ? supabase
       .from("training_sessions")
       .select(
-        "id,team_id,athlete_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count),workout_results(id,training_session_id,athlete_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
+        "id,team_id,athlete_id,scheduled_date,status,teams(id,name),training_session_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count),training_session_challenge_prescriptions(workout_name,prescribed_work_ms,prescribed_total_ms,schema_version,step_count),training_session_performed_variants(selected_variant),workout_results(id,training_session_id,athlete_id,completed_at),workout_session_attempts(workout_result_id,training_session_id,athlete_id,finalization_state,measurement_version,measurement_quality,prescribed_step_count,completed_work_blocks,skipped_work_blocks)"
       )
       .eq("athlete_id", activeContext.athleteId)
       .order("scheduled_date", { ascending: true })
@@ -216,7 +219,11 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
   );
   const sessions: AthleteDashboardSessionWithAdherence[] = ((rows ?? []) as SessionRow[]).map((row) => {
     const team = one(row.teams);
-    const prescription = one(row.training_session_prescriptions);
+    const assignedPrescription = one(row.training_session_prescriptions);
+    const challengePrescription = one(row.training_session_challenge_prescriptions);
+    const prescription = one(row.training_session_performed_variants)?.selected_variant === "challenge"
+      ? challengePrescription
+      : assignedPrescription;
     const result = one(row.workout_results);
     const attempts = Array.isArray(row.workout_session_attempts)
       ? row.workout_session_attempts

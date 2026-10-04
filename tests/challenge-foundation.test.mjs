@@ -73,7 +73,7 @@ function assertObservedError(result, message) {
 async function createExecutionFixture(control, label) {
   const id = () => randomUUID();
   const fixture = { owner: id(), self: id(), athlete: id(), team: id(), plan: id(), item: id(), base: id(), challenge: id(), exercise: id(), assignments: [] };
-  await control.query("INSERT INTO auth.users(id,email) VALUES($1,$2),($3,$4)", [fixture.owner, `${label}-owner@example.test`, fixture.self, `${label}-self@example.test`]);
+  await control.query("INSERT INTO auth.users(id,email) VALUES($1,$2),($3,$4)", [fixture.owner, `${fixture.owner}-owner@example.test`, fixture.self, `${fixture.self}-self@example.test`]);
   await control.query("INSERT INTO public.athletes(id,display_name,created_by_profile_id) VALUES($1,$2,$3)", [fixture.athlete, `${label} athlete`, fixture.owner]);
   await control.query("INSERT INTO public.athlete_profile_relationships(athlete_id,profile_id,role,training_permission,manage_permission,created_by_profile_id) VALUES($1,$2,'self',true,true,$3)", [fixture.athlete, fixture.self, fixture.owner]);
   await control.query("INSERT INTO public.teams(id,name,created_by_user_id) VALUES($1,$2,$3)", [fixture.team, `${label} team`, fixture.owner]);
@@ -181,8 +181,8 @@ test("Challenge selection and authenticated event insertion serialize on the ses
     const selectionFirst = await fixture.newSession(); await beginAuthenticated(selection, fixture.self); await selectChallenge(selection, selectionFirst);
     const blockedEvent = observe((async () => { await beginAuthenticated(eventClient, fixture.self); return insertStarted(eventClient, selectionFirst); })());
     await blockedBy(observer, selectionPid, eventPid, "selection-first event"); await selection.query("COMMIT");
-    assertObservedError(await blockedEvent, "Challenge execution is not available"); await eventClient.query("ROLLBACK");
-    assert.equal((await control.query("SELECT count(*)::int AS count FROM public.workout_session_events WHERE session_id=$1", [selectionFirst])).rows[0].count, 0);
+    await blockedEvent; await eventClient.query("COMMIT");
+    assert.equal((await control.query("SELECT count(*)::int AS count FROM public.workout_session_events WHERE session_id=$1", [selectionFirst])).rows[0].count, 1);
     assert.equal((await control.query("SELECT selected_variant FROM public.training_session_performed_variants WHERE session_id=$1", [selectionFirst])).rows[0].selected_variant, "challenge");
     const eventFirst = await fixture.newSession(); await beginAuthenticated(eventClient, fixture.self); await insertStarted(eventClient, eventFirst);
     const blockedSelection = observe((async () => { await beginAuthenticated(selection, fixture.self); return selectChallenge(selection, eventFirst); })());
@@ -214,7 +214,7 @@ test("Challenge selection and canonical completion serialize on the session row"
     const selectionFirst = await fixture.newSession(); await beginAuthenticated(selection, fixture.self); await selectChallenge(selection, selectionFirst);
     const blockedCompletion = observe((async () => { await beginAuthenticated(completion, fixture.self); return complete(completion, selectionFirst); })());
     await blockedBy(observer, selectionPid, completionPid, "selection-first completion"); await selection.query("COMMIT");
-    assertObservedError(await blockedCompletion, "Challenge completion is not available"); await completion.query("ROLLBACK");
+    assertObservedError(await blockedCompletion, "Challenge completion requires a performed attempt"); await completion.query("ROLLBACK");
     assert.equal((await control.query("SELECT count(*)::int AS count FROM public.workout_results WHERE training_session_id=$1", [selectionFirst])).rows[0].count, 0);
     assert.equal((await control.query("SELECT status::text AS status FROM public.training_sessions WHERE id=$1", [selectionFirst])).rows[0].status, "scheduled");
     assert.equal((await control.query("SELECT selected_variant FROM public.training_session_performed_variants WHERE session_id=$1", [selectionFirst])).rows[0].selected_variant, "challenge");
@@ -262,7 +262,7 @@ test("Challenge selection and authenticated direct completion state serialize on
     })());
     await blockedBy(observer, selectionPid, coachPid, "selection-first direct completion");
     await selection.query("COMMIT");
-    assertObservedError(await blockedDirectCompletion, "Challenge completion is not available");
+    assertObservedError(await blockedDirectCompletion, "Challenge completion requires canonical execution");
     await coachStatus.query("ROLLBACK");
     assert.deepEqual((await control.query("SELECT status::text AS status FROM public.training_sessions WHERE id=$1", [selectionFirst])).rows[0], { status: "scheduled" });
     assert.deepEqual((await control.query("SELECT selected_variant::text AS selected_variant FROM public.training_session_performed_variants WHERE session_id=$1", [selectionFirst])).rows[0], { selected_variant: "challenge" });
@@ -277,7 +277,7 @@ test("Challenge selection and authenticated direct completion state serialize on
     })());
     await blockedBy(observer, selectionPid, coachPid, "selection-first direct completion timestamp");
     await selection.query("COMMIT");
-    assertObservedError(await blockedDirectTimestamp, "Challenge completion is not available");
+    assertObservedError(await blockedDirectTimestamp, "Challenge completion requires canonical execution");
     await coachStatus.query("ROLLBACK");
     assert.deepEqual((await control.query("SELECT status::text AS status, completed_at IS NULL AS no_completed_at FROM public.training_sessions WHERE id=$1", [timestampSelectionFirst])).rows[0], { status: "scheduled", no_completed_at: true });
     assert.deepEqual((await control.query("SELECT selected_variant::text AS selected_variant FROM public.training_session_performed_variants WHERE session_id=$1", [timestampSelectionFirst])).rows[0], { selected_variant: "challenge" });
@@ -319,5 +319,43 @@ test("Challenge selection and authenticated direct completion state serialize on
     await Promise.allSettled([selection, coachStatus].map((client) => client.query("ROLLBACK")));
     if (fixture) await cleanupExecutionFixture(control, fixture);
     await Promise.allSettled([selection, coachStatus, observer, control].map((client) => client.end()));
+  }
+});
+
+test("canonical Challenge completion consumes its one-use permit before a direct writer can proceed", { skip: !concurrencyUrl }, async () => {
+  const connectionString = localDisposableUrl(concurrencyUrl);
+  const [completion, direct, observer, control] = ["completion", "direct", "observer", "control"].map((application_name) => new Client({ connectionString, application_name }));
+  let fixture;
+  try {
+    await Promise.all([completion, direct, observer, control].map((client) => client.connect()));
+    fixture = await createExecutionFixture(control, "canonical-direct-race");
+    const completionPid = (await completion.query("SELECT pg_backend_pid() AS id")).rows[0].id;
+    const directPid = (await direct.query("SELECT pg_backend_pid() AS id")).rows[0].id;
+    const session = await fixture.newSession();
+    await beginAuthenticated(completion, fixture.self);
+    await completion.query("SELECT public.select_my_training_session_variant($1,'challenge')", [session]);
+    const attempt = randomUUID();
+    await completion.query("INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,phase,elapsed_ms,occurred_at) VALUES($1,$2,$3,0,'workout_started','ready',0,clock_timestamp())", [randomUUID(), session, attempt]);
+    await completion.query("SELECT public.register_my_workout_session_attempt($1,$2)", [attempt, session]);
+    // Hold the same session-row lock the completion RPC uses so the competing
+    // direct writer demonstrably waits on a distinct backend PID.
+    await completion.query("SELECT id FROM public.training_sessions WHERE id=$1 FOR UPDATE", [session]);
+    const blockedDirect = observe((async () => { await beginAuthenticated(direct, fixture.owner); return direct.query("UPDATE public.training_sessions SET status='completed' WHERE id=$1", [session]); })());
+    await blockedBy(observer, completionPid, directPid, "canonical-completion/direct-status");
+    await completion.query("SELECT * FROM public.complete_my_training_session($1)", [session]);
+    await completion.query("COMMIT");
+    const directResult = await blockedDirect;
+    assert.ok(!directResult.error, "post-canonical same-status update is not a second completion transition");
+    await direct.query("COMMIT");
+    assert.equal((await control.query("SELECT count(*)::int AS count FROM public.workout_results WHERE training_session_id=$1", [session])).rows[0].count, 1);
+    assert.equal((await control.query("SELECT count(*)::int AS count FROM private.training_session_canonical_completion_permits WHERE session_id=$1", [session])).rows[0].count, 0, "permit is consumed in the canonical result/session synchronization");
+    await beginAuthenticated(direct, fixture.owner);
+    const timestampRewrite = observe(direct.query("UPDATE public.training_sessions SET completed_at=completed_at+interval '1 second' WHERE id=$1", [session]));
+    assertObservedError(await timestampRewrite, "Challenge completion requires canonical execution");
+    await direct.query("ROLLBACK");
+  } finally {
+    await Promise.allSettled([completion, direct].map((client) => client.query("ROLLBACK")));
+    if (fixture) await cleanupExecutionFixture(control, fixture);
+    await Promise.allSettled([completion, direct, observer, control].map((client) => client.end()));
   }
 });
