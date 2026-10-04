@@ -5,8 +5,10 @@ import WorkoutPlayer from "@/components/workout/workout-player";
 import CompletedWorkoutDelivery from "@/components/workout/completed-workout-delivery";
 import WorkoutFeedback from "@/components/workout/workout-feedback";
 import WorkoutPreview from "@/components/workout/workout-preview";
+import ChallengeSelection from "@/components/workout/challenge-selection";
 import { mapSessionPrescription, type SessionPrescriptionRow } from "@/lib/training-session-prescription";
 import { loadFamiliarExerciseIds } from "@/lib/athlete-exercise-familiarity-server";
+import { loadMyFamilyAthleteContexts } from "@/lib/my-athlete-contexts-server";
 
 type PageProps = {
   params: Promise<{
@@ -84,6 +86,7 @@ export default async function TrainingSessionPage({
       id,
       scheduled_date,
       status,
+      completed_at,
       workout_id,
       team_id,
       athlete_id,
@@ -123,7 +126,7 @@ export default async function TrainingSessionPage({
     .limit(1);
 
   // Fail closed: an unreadable result must not offer another completion.
-  const isCompleted = session.status === "completed" || Boolean(results?.length);
+  const isCompleted = session.status === "completed" || Boolean(session.completed_at) || Boolean(results?.length);
 
   const workout = getOne(session.workouts as Workout | Workout[] | null);
   const team = getOne(session.teams as Team | Team[] | null);
@@ -164,9 +167,36 @@ export default async function TrainingSessionPage({
   }
 
   const liveSteps = (steps ?? []) as WorkoutStep[];
-  const { data: selectedVariant } = await supabase.from("training_session_performed_variants")
-    .select("selected_variant").eq("session_id", session.id).single();
+  const videos = new Map(liveSteps.map((step) => [step.id, getOne(step.exercises)?.video_url ?? null]));
+  const [
+    { data: selectedVariant },
+    { data: challengeOption, error: challengeOptionError },
+    { data: attempts },
+    { data: events },
+    familyContexts,
+  ] = await Promise.all([
+    supabase.from("training_session_performed_variants").select("selected_variant").eq("session_id", session.id).single(),
+    supabase.from("training_session_challenge_prescriptions")
+      .select("source_workout_id,workout_name,schema_version,prescribed_work_ms,prescribed_rest_ms,prescribed_total_ms,step_count,steps")
+      .eq("session_id", session.id)
+      .single(),
+    supabase.from("workout_session_attempts").select("id").eq("training_session_id", session.id).limit(1),
+    supabase.from("workout_session_events").select("id").eq("session_id", session.id).limit(1),
+    loadMyFamilyAthleteContexts(),
+  ]);
   const selectedChallenge = selectedVariant?.selected_variant === "challenge";
+  const canSelectChallenge = Boolean(session.athlete_id && familyContexts.some((context) => context.athleteId === session.athlete_id && context.relationshipRole === "self"));
+  const selectionLocked = isCompleted || Boolean(attempts?.length) || Boolean(events?.length);
+  let challengeAvailable = false;
+  try {
+    if (!challengeOptionError && challengeOption) {
+      const challenge = challengeOption as unknown as { source_workout_id: string } & SessionPrescriptionRow;
+      mapSessionPrescription({ ...challenge, workout_id: challenge.source_workout_id }, videos);
+      challengeAvailable = true;
+    }
+  } catch {
+    challengeAvailable = false;
+  }
   const { data: prescription, error: prescriptionError } = await supabase.from(selectedChallenge ? "training_session_challenge_prescriptions" : "training_session_prescriptions")
     .select(selectedChallenge
       ? "source_workout_id,workout_name,schema_version,prescribed_work_ms,prescribed_rest_ms,prescribed_total_ms,step_count,steps"
@@ -177,7 +207,6 @@ export default async function TrainingSessionPage({
     ? (prescription as unknown as { source_workout_id?: string } | null)?.source_workout_id
     : (prescription as { workout_id?: string } | null)?.workout_id;
   try {
-    const videos = new Map(liveSteps.map((step) => [step.id, getOne(step.exercises)?.video_url ?? null]));
     prescribed = prescriptionError || !prescription ? null : mapSessionPrescription((selectedChallenge
       ? { ...(prescription as unknown as { source_workout_id: string }), workout_id: (prescription as unknown as { source_workout_id: string }).source_workout_id }
       : prescription) as SessionPrescriptionRow, videos);
@@ -200,7 +229,7 @@ export default async function TrainingSessionPage({
         <header className="mt-8 border-b border-slate-800 pb-8">
           <div className="flex flex-wrap items-center gap-3">
             <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">
-              Assigned Training
+              {selectedChallenge ? "Challenge Training" : "Assigned Training"}
             </p>
 
             <span className="rounded-full bg-slate-800 px-3 py-1 text-xs font-medium capitalize text-slate-300">
@@ -223,12 +252,20 @@ export default async function TrainingSessionPage({
             </p>
           )}
 
-          {workout?.description && (
+          {!selectedChallenge && workout?.description && (
             <p className="mt-5 max-w-2xl text-slate-300">
               {workout.description}
             </p>
           )}
         </header>
+
+        <ChallengeSelection
+          sessionId={session.id}
+          challengeAvailable={challengeAvailable}
+          canSelectChallenge={canSelectChallenge}
+          selectionLocked={selectionLocked}
+          selectedVariant={selectedChallenge ? "challenge" : "assigned"}
+        />
 
         <WorkoutPreview steps={workoutSteps} familiarExerciseIds={familiarExerciseIds} />
 

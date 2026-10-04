@@ -8,6 +8,7 @@ export type AthleteDashboardSession = {
   scheduledDate: string;
   status: string;
   workoutName: string;
+  performedVariant?: "assigned" | "challenge";
   completedAt: string | null;
   prescribedWorkMs: number | null;
   prescribedTotalMs: number | null;

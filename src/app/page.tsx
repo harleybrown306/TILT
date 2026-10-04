@@ -129,6 +129,9 @@ function TrainingCard({
         </div>
         <h3 className="mt-3 text-xl font-semibold">{session.workoutName}</h3>
         <p className="mt-1 text-sm text-slate-400">{session.teamName}</p>
+        {recent && session.performedVariant === "challenge" && (
+          <p className="mt-2 text-sm font-semibold text-emerald-300">Challenge</p>
+        )}
         {recent && (
           <>
             <p className="mt-2 text-sm text-slate-400">
@@ -268,6 +271,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
       scheduledDate: row.scheduled_date,
       status: row.status,
       workoutName: prescription?.workout_name ?? "Assigned workout",
+      performedVariant: one(row.training_session_performed_variants)?.selected_variant ?? "assigned",
       completedAt: result?.completed_at ?? null,
       prescribedWorkMs: prescription?.prescribed_work_ms ?? null,
       prescribedTotalMs: prescription?.prescribed_total_ms ?? null,

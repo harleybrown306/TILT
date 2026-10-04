@@ -1,14 +1,24 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { finalizePersistedWorkoutAttempt } from "@/lib/workout-attempt-finalization";
-import { beginAttempt, changeAttempt, recoveryNow, type Checkpoint, type Command, type WorkoutStep } from "@/lib/workout-session-state";
-import { flushEvents, mutateBundle, saveChange, storedCheckpoint } from "@/lib/workout-session-storage";
+import { beginAttempt, changeAttempt, checkpointMatchesPerformedPrescription, recoveryNow, type Checkpoint, type Command, type WorkoutStep } from "@/lib/workout-session-state";
+import { flushEvents, mutateBundle, saveChange, storedCheckpoint, type Bundle } from "@/lib/workout-session-storage";
 import type { WorkoutAudioTransition } from "@/lib/workout-audio-cues";
 
 type SessionInput = { actorUserId: string; athleteId: string; sessionId: string; workoutId: string; workoutName: string; steps: WorkoutStep[] };
 type RuntimeOptions = { onStateTransition?: (transition: WorkoutAudioTransition) => void };
+
+function discardIncompatibleRecovery(bundle: Bundle, checkpoint: Checkpoint) {
+  delete bundle.checkpoints[checkpoint.sessionId];
+  bundle.outbox = bundle.outbox.filter(({ event }) => event.session_id !== checkpoint.sessionId || event.attempt_id !== checkpoint.attemptId);
+}
+
 export function useWorkoutSession(input: SessionInput, runtime: RuntimeOptions = {}) {
+  const performedPrescription = useMemo(
+    () => ({ workoutId: input.workoutId, workoutName: input.workoutName, steps: input.steps }),
+    [input.workoutId, input.workoutName, input.steps],
+  );
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null);
   const [ready, setReady] = useState(false); const [warning, setWarning] = useState("");
   const current = useRef<Checkpoint | null>(null); const busy = useRef(Promise.resolve());
@@ -48,15 +58,26 @@ export function useWorkoutSession(input: SessionInput, runtime: RuntimeOptions =
     clock.current = { logical: cp.logicalNow, performance: performance.now(), wall: Date.now() };
     setCheckpoint(cp);
   }, []);
+  const clearPublishedRecovery = useCallback(() => {
+    current.current = null;
+    clock.current = { logical: 0, performance: 0, wall: 0 };
+    setCheckpoint(null);
+  }, []);
   const run = useCallback((command: Command | "begin", expected?: { index: number; phase: string; paused: boolean }) => {
     const work = busy.current.then(async () => {
       if (activeActor.current !== input.actorUserId || (command === "begin" && await verifyActor() !== input.actorUserId)) { setWarning("Your signed-in account changed. Reload before continuing."); return; }
       try {
         let createdEvents = false;
+        let discardedIncompatibleRecovery = false;
         let audioTransition: WorkoutAudioTransition | undefined;
         const bundle = await mutateBundle(input.athleteId, (bundle) => {
           const before = bundle.outbox.length;
-          const cp = storedCheckpoint(bundle, input.athleteId, input.sessionId);
+          let cp = storedCheckpoint(bundle, input.athleteId, input.sessionId);
+          if (cp && !checkpointMatchesPerformedPrescription(cp, performedPrescription)) {
+            discardIncompatibleRecovery(bundle, cp);
+            cp = undefined;
+            discardedIncompatibleRecovery = true;
+          }
           if (command === "begin") {
             if (cp) return;
             const change = beginAttempt({
@@ -74,37 +95,50 @@ export function useWorkoutSession(input: SessionInput, runtime: RuntimeOptions =
           }
           createdEvents = bundle.outbox.length > before;
         });
-        const cp = storedCheckpoint(bundle, input.athleteId, input.sessionId); if (cp) publish(cp);
+        const cp = storedCheckpoint(bundle, input.athleteId, input.sessionId);
+        if (discardedIncompatibleRecovery) {
+          clearPublishedRecovery();
+          setWarning("A local recovery copy did not match this workout's current prescription, so it was not resumed.");
+        }
+        if (cp) publish(cp);
         if (audioTransition) transitionListener.current?.(audioTransition);
         if (bundle.dropped || bundle.outbox.some((e) => e.status !== "pending")) setWarning("Some workout observations need synchronization review. Workout completion is still available.");
         if (createdEvents || command === "finalize") void flush();
       } catch { setWarning("Workout recovery storage is unavailable. Retry; telemetry will not prevent saving a finished workout."); }
     });
     busy.current = work.catch(() => {}); return work;
-  }, [input, verifyActor, publish, flush]);
+  }, [input, performedPrescription, verifyActor, publish, clearPublishedRecovery, flush]);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
         if (await verifyActor() !== input.actorUserId) return;
+        let discardedIncompatibleRecovery = false;
         const bundle = await mutateBundle(input.athleteId, (bundle) => {
           const cp = storedCheckpoint(bundle, input.athleteId, input.sessionId);
-          if (cp) {
+          if (cp && checkpointMatchesPerformedPrescription(cp, performedPrescription)) {
             saveChange(bundle, changeAttempt(cp, "recover", recoveryNow(cp, Date.now()), crypto.randomUUID.bind(crypto), false), Date.now());
+          } else if (cp) {
+            // A different server-resolved prescription (such as Assigned →
+            // Challenge) must win over same-device, non-durable recovery.
+            discardIncompatibleRecovery(bundle, cp);
+            discardedIncompatibleRecovery = true;
           }
         });
         const recovered = bundle.checkpoints[input.sessionId];
+        if (!cancelled && discardedIncompatibleRecovery) clearPublishedRecovery();
         if (!cancelled && activeActor.current === input.actorUserId && recovered) {
           publish(recovered);
           const { data, error } = await supabase.from("workout_session_events").select("id")
             .eq("session_id", input.sessionId).eq("attempt_id", recovered.attemptId).eq("event_type", "workout_started").limit(1);
           if (!error && data?.length) { try { await register(recovered.attemptId); } catch { setWarning("Workout start telemetry was saved, but attempt registration needs retry."); } }
         }
+        if (!cancelled && discardedIncompatibleRecovery) setWarning("A local recovery copy did not match this workout's current prescription, so it was not resumed.");
       } catch { if (!cancelled) setWarning("Unable to load same-device workout recovery. Check browser storage and retry."); }
       finally { if (!cancelled) { setReady(true); void flush(); } }
     })();
     return () => { cancelled = true; };
-  }, [input.sessionId, input.athleteId, input.actorUserId, publish, verifyActor, flush, register, supabase]);
+  }, [input.sessionId, input.athleteId, input.actorUserId, performedPrescription, publish, clearPublishedRecovery, verifyActor, flush, register, supabase]);
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       activeActor.current = session?.user.id ?? "";
@@ -125,5 +159,8 @@ export function useWorkoutSession(input: SessionInput, runtime: RuntimeOptions =
     const delivery = window.setInterval(() => { void flush(); }, 30000);
     return () => { document.removeEventListener("visibilitychange", visibility); window.removeEventListener("online", online); clearInterval(timer); clearInterval(delivery); };
   }, [run, flush]);
-  return { checkpoint, ready, warning, run, flush, finalizeAttempt };
+  const compatibleCheckpoint = checkpoint && checkpointMatchesPerformedPrescription(checkpoint, performedPrescription)
+    ? checkpoint
+    : null;
+  return { checkpoint: compatibleCheckpoint, ready, warning, run, flush, finalizeAttempt };
 }

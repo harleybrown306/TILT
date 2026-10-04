@@ -12,12 +12,34 @@ export type Checkpoint = {
   totalPauseMs: number; sequence: number; logicalNow: number; savedWallAt: number;
   finalized: boolean; workProgressMs: number; skippedSteps: number; inferredTransitions: number;
 };
+export type PerformedPrescription = Pick<Checkpoint, "workoutId" | "workoutName" | "steps">;
 export type Change = { checkpoint: Checkpoint; events: WorkoutSessionEvent[] };
 export const MAX_RECOVERY_GAP_MS = 24 * 60 * 60 * 1000;
 export function recoveryNow(cp: Checkpoint, wall: number) {
   const gap = wall - cp.savedWallAt;
   // Wall jumps >24h or backwards cannot be distinguished safely from absence.
   return cp.logicalNow + (gap >= 0 && gap <= MAX_RECOVERY_GAP_MS ? gap : 0);
+}
+/**
+ * Recovery state is useful only when it matches the immutable prescription
+ * resolved by the server for this session. Video URLs are intentionally not
+ * compared: they are live presentation metadata, not prescription facts.
+ */
+export function checkpointMatchesPerformedPrescription(checkpoint: Checkpoint, prescription: PerformedPrescription) {
+  return checkpoint.workoutId === prescription.workoutId
+    && checkpoint.workoutName === prescription.workoutName
+    && checkpoint.steps.length === prescription.steps.length
+    && checkpoint.steps.every((step, index) => {
+      const current = prescription.steps[index];
+      return step.id === current?.id
+        && step.exerciseId === current.exerciseId
+        && step.position === current.position
+        && step.exerciseName === current.exerciseName
+        && step.durationSeconds === current.durationSeconds
+        && step.restSeconds === current.restSeconds
+        && step.offHand === current.offHand
+        && step.notes === current.notes;
+    });
 }
 export function phaseElapsed(cp: Checkpoint, now: number) {
   return Math.min(cp.phaseDurationMs, Math.max(0, (cp.pausedAt ?? now) - cp.phaseStartedAt - cp.phasePauseMs));

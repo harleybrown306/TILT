@@ -35,11 +35,11 @@ test("Phase 18B does not use a caller-settable GUC to bypass Challenge completio
   assert.doesNotMatch(sql, /set_config\('tilt\.challenge_canonical_completion/);
 });
 
-test("player chooses the locked performed snapshot without Challenge presentation work", () => {
+test("player chooses the locked performed snapshot and leaves Challenge selection to the athlete UX", () => {
   assert.match(player, /training_session_performed_variants/);
   assert.match(player, /selectedChallenge \? "training_session_challenge_prescriptions"/);
   assert.match(player, /performedWorkoutId/);
-  assert.doesNotMatch(player, /Level Up This TILT|Challenge badge/i);
+  assert.match(player, /ChallengeSelection/);
 });
 
 test("disposable SQL validator covers Challenge execution, provenance, and bypass boundaries", () => {
