@@ -28,6 +28,7 @@ export default async function InvitationPage({ params }: { params: Promise<{ tok
         <p className="capitalize text-emerald-400">{summary.invitation_role.replace("_", " ")} · {canAcceptInvitation(summary) ? "pending" : summary.invitation_status === "pending" ? "expired" : summary.invitation_status}</p>
         <p className="text-slate-400">Expires {formatInvitationDate(summary.expires_at)}</p>
         <p className="text-sm text-slate-400">Accept using the account associated with this invitation. Existing memberships on other teams will stay the same.</p>
+        {summary.invitation_role === "athlete" && <p className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-100">This legacy athlete invitation adds team membership only. It does not create a training profile; ask the coach for a family invitation to set up training.</p>}
         {canAcceptInvitation(summary) ? <RosterActionForm action={acceptInvitation.bind(null, token)} label="Accept Invitation" /> : <p className="text-slate-400">This invitation cannot be accepted. If you already accepted it, open your dashboard. Otherwise, ask the coach for a new link.</p>}
       </>}
       {isInvitationToken(token) && <RosterActionForm action={switchInvitationAccount.bind(null, token)} label="Sign in with another account" />}

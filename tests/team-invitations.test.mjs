@@ -263,11 +263,19 @@ for (const managerRole of ["coach", "assistant_coach"]) {
       },
     }).default;
     const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ teamId }) }));
-    assert.ok(markup.includes("Invite Athlete")); assert.equal(markup.includes("Invite Assistant Coach"), managerRole === "coach"); assert.equal(markup.includes("Revoke Invitation"), managerRole === "coach");
+    assert.ok(!markup.includes("Invite Athlete")); assert.equal(markup.includes("Invite Assistant Coach"), managerRole === "coach"); assert.equal(markup.includes("Revoke Invitation"), managerRole === "coach");
+    assert.ok(markup.includes("Invite a family") && markup.includes("Use this for a new or family-managed athlete.") && markup.includes("Direct athlete invitations are unavailable"));
     assert.ok(markup.includes("Athletes") && markup.includes("Assistant Coaches") && markup.includes("Pending Invitations"));
     assert.ok(!markup.includes("Copy Invitation Link") && !markup.includes("token_hash"));
   });
 }
+
+test("legacy athlete invitation clearly distinguishes team membership from training setup", async () => {
+  const athleteMarkup = renderToStaticMarkup(await invitePage(setup({ acceptedRole: "athlete" })));
+  assert.ok(athleteMarkup.includes("This legacy athlete invitation adds team membership only.") && athleteMarkup.includes("family invitation to set up training"));
+  const staffMarkup = renderToStaticMarkup(await invitePage(setup({ acceptedRole: "assistant_coach" })));
+  assert.ok(!staffMarkup.includes("This legacy athlete invitation adds team membership only."));
+});
 
 function find(node, predicate) {
   if (!node || typeof node !== "object") return null;

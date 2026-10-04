@@ -187,7 +187,9 @@ test("new team appears through normal dashboard membership query and existing co
   await assert.rejects(fixture.action(idle, form()), /REDIRECT:/);
   const markup = await dashboard(fixture);
   assert.ok(markup.includes("JV Lacrosse") && markup.includes(`href="/teams/${newTeamId}"`));
-  assert.ok(markup.includes("Original team") && markup.includes('href="/#athlete-training"'));
+  assert.ok(markup.includes("Original team") && markup.includes("Training is not set up yet"));
+  assert.ok(markup.includes("Team membership is active. Training will appear after a family invitation or another supported athlete setup."));
+  assert.ok(!markup.includes("View your assigned training"));
   const page = loadTs("src/app/teams/[teamId]/page.tsx", fixture.mocks).default;
   const teamMarkup = renderToStaticMarkup(await page({ params: Promise.resolve({ teamId: newTeamId }) }));
   assert.ok(teamMarkup.includes("JV Lacrosse"));

@@ -340,13 +340,30 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
             <p className="mt-2 text-slate-400">This training profile cannot be used with this account context.</p>
             <Link href="/" className="mt-4 inline-block font-semibold text-emerald-400 hover:text-emerald-300">Return to dashboard</Link>
           </section>
+        ) : athleteResolution.status === "none" ? (
+          <section className="mb-10 rounded-2xl border border-slate-800 bg-slate-900 p-6" aria-labelledby="no-athlete-context">
+            <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Training</p>
+            <h2 id="no-athlete-context" className="mt-2 text-2xl font-semibold">Training is not set up yet</h2>
+            <p className="mt-2 text-slate-400">Team membership by itself does not create training access. Add an athlete for your family, or ask a team manager for a family invitation.</p>
+          </section>
         ) : activeContext && (
           <>
-            {familyContexts.length > 1 && <nav className="mb-8" aria-label="Training profile"><p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Training profile</p><div className="mt-3 flex flex-wrap gap-3">{familyContexts.map((context) => <Link key={context.athleteId} href={`/?athlete=${encodeURIComponent(context.athleteId)}`} aria-current={context.athleteId === activeContext.athleteId ? "page" : undefined} className={`rounded-lg px-4 py-2 text-sm font-semibold ${context.athleteId === activeContext.athleteId ? "bg-emerald-500 text-slate-950" : "border border-slate-700 text-slate-200 hover:bg-slate-800"}`}>{context.displayName}</Link>)}</div></nav>}
+            <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6" aria-labelledby="active-training-context">
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Training context</p>
+              <h2 id="active-training-context" className="mt-2 text-2xl font-semibold">
+                {activeContext.relationshipRole === "self" ? "Your training" : `Viewing ${activeContext.displayName} as guardian`}
+              </h2>
+              <p className="mt-2 text-sm text-slate-400">
+                {activeContext.relationshipRole === "self"
+                  ? "You are viewing your own training context."
+                  : `You are viewing ${activeContext.displayName}'s training as their guardian.`}
+              </p>
+            </section>
+            {familyContexts.length > 1 && <nav className="mb-8" aria-label="Training profile"><p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Choose training profile</p><p className="mt-1 text-sm text-slate-400">The selected profile is highlighted below.</p><div className="mt-3 flex flex-wrap gap-3">{familyContexts.map((context) => <Link key={context.athleteId} href={`/?athlete=${encodeURIComponent(context.athleteId)}`} aria-current={context.athleteId === activeContext.athleteId ? "page" : undefined} aria-label={`${context.displayName}: ${context.relationshipRole === "self" ? "your training" : "guardian view"}${context.athleteId === activeContext.athleteId ? ", selected" : ""}`} className={`rounded-lg px-4 py-2 text-sm font-semibold ${context.athleteId === activeContext.athleteId ? "bg-emerald-500 text-slate-950" : "border border-slate-700 text-slate-200 hover:bg-slate-800"}`}><span className="block">{context.displayName}</span><span className={`mt-1 block text-xs ${context.athleteId === activeContext.athleteId ? "text-slate-800" : "text-slate-400"}`}>{context.relationshipRole === "self" ? "Your training" : "Guardian view"}</span></Link>)}</div></nav>}
             <section id="athlete-training" className="mb-10">
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Today</p>
-              <h2 className="mt-1 text-2xl font-semibold">{activeContext.displayName}&apos;s Training</h2>
-              <p className="mt-1 text-sm text-slate-400">What you need to complete today.</p>
+              <h2 className="mt-1 text-2xl font-semibold">{activeContext.relationshipRole === "self" ? "Your training today" : `${activeContext.displayName}'s training today`}</h2>
+              <p className="mt-1 text-sm text-slate-400">{activeContext.relationshipRole === "self" ? "What you need to complete today." : `Training scheduled for ${activeContext.displayName}.`}</p>
               <div className="mt-4 space-y-4">
                 {todayTraining.length ? todayTraining.map((session) => (
                   <TrainingCard key={session.id} session={session} today={today} />
@@ -361,7 +378,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
 
             <section className="mb-10">
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Time summary</p>
-              <h2 className="mt-1 text-2xl font-semibold">Your training time</h2>
+              <h2 className="mt-1 text-2xl font-semibold">{activeContext.relationshipRole === "self" ? "Your training time" : `${activeContext.displayName}'s training time`}</h2>
               <p className="mt-1 text-sm text-slate-400">Minutes are completed prescribed work, not measured physical activity.</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
                 <Metric label="Weekly Prescribed Minutes" value={displayMinutes(metrics.weeklyWorkMs)} detail="Rolling 7 local dates" />
@@ -437,11 +454,20 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
             <div className="grid gap-4 md:grid-cols-2">
               {teamMemberships.map((membership) => {
                 const team = one(membership.teams);
+                const teamCard = <>
+                  <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">{membership.role.replace("_", " ")}</p>
+                  <h3 className="mt-2 text-xl font-semibold">{team?.name ?? "Unnamed team"}</h3>
+                </>;
+                if (membership.role === "athlete" && !activeContext) return (
+                  <article key={membership.id} className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
+                    {teamCard}
+                    <p className="mt-3 text-sm text-slate-400">Team membership is active. Training will appear after a family invitation or another supported athlete setup.</p>
+                  </article>
+                );
                 return (
                   <Link key={membership.id} href={membership.role === "athlete" ? "/#athlete-training" : `/teams/${membership.team_id}`} className="block rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-emerald-500 hover:bg-slate-800">
-                    <p className="text-sm font-semibold uppercase tracking-wide text-emerald-400">{membership.role.replace("_", " ")}</p>
-                    <h3 className="mt-2 text-xl font-semibold">{team?.name ?? "Unnamed team"}</h3>
-                    <p className="mt-3 text-sm text-slate-400">{membership.role === "athlete" ? "View your assigned training" : "Open team management dashboard"}</p>
+                    {teamCard}
+                    <p className="mt-3 text-sm text-slate-400">{membership.role === "athlete" ? "Open current training context" : "Open team management dashboard"}</p>
                   </Link>
                 );
               })}
