@@ -8,11 +8,18 @@ import { formatInvitationDate } from "@/lib/team-invitations";
 import { isUuid } from "@/lib/training-assignment";
 import { createGuardianInvitation, revokeGuardianInvitation } from "./actions";
 
+function guardianInvitationStatusLabel(status: GuardianInvitationListItem["invitation_status"]) {
+  if (status === "pending") return "Invitation is ready to use";
+  if (status === "accepted") return "Guardian access is active";
+  if (status === "revoked") return "Invitation was revoked";
+  return "Invitation expired";
+}
+
 export default async function GuardianManagementPage({ params }: { params: Promise<{ athleteId: string }> }) {
   const { athleteId } = await params;
   if (!isUuid(athleteId)) redirect("/");
   const context = (await loadMyFamilyAthleteContexts()).find((candidate) => candidate.athleteId === athleteId && candidate.relationshipRole === "guardian" && candidate.canManage);
-  if (!context) redirect("/");
+  if (!context) redirect("/?access=family-management-unavailable");
 
   let invitations: GuardianInvitationListItem[] = [];
   let failed = false;
@@ -34,7 +41,7 @@ export default async function GuardianManagementPage({ params }: { params: Promi
     <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6"><h2 className="text-xl font-semibold">Guardian invitations</h2>
       {failed ? <p role="alert" className="mt-3 text-rose-300">Unable to load guardian invitations. Reload before managing access.</p> : !invitations.length ? <p className="mt-3 text-sm text-slate-400">No guardian invitations yet.</p> : <div className="mt-4 space-y-3">{invitations.map((invitation) => {
         const status = guardianInvitationStatus(invitation);
-        return <article key={invitation.invitation_id} className="rounded-xl border border-slate-700 bg-slate-950 p-4"><p className="font-medium">{invitation.invited_email}</p><p className="mt-1 text-sm capitalize text-slate-400">{status} · Expires {formatInvitationDate(invitation.expires_at)}</p>
+        return <article key={invitation.invitation_id} className="rounded-xl border border-slate-700 bg-slate-950 p-4"><p className="font-medium">{invitation.invited_email}</p><p className="mt-1 text-sm text-slate-400">{guardianInvitationStatusLabel(status)} · Expires {formatInvitationDate(invitation.expires_at)}</p>
           {status === "pending" && <div className="mt-3"><FamilyInvitationActionForm action={revokeGuardianInvitation.bind(null, athleteId, invitation.invitation_id)} label="Revoke invitation" confirmation="Revoke this guardian invitation? The link will stop working." /></div>}
         </article>;
       })}</div>}

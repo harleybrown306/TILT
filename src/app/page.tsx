@@ -180,7 +180,7 @@ function Metric({ label, value, detail }: { label: string; value: string | numbe
   );
 }
 
-export default async function HomePage({ searchParams }: { searchParams: Promise<{ athlete?: string }> }) {
+export default async function HomePage({ searchParams }: { searchParams: Promise<{ athlete?: string; access?: string }> }) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -188,7 +188,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
 
   if (!user) redirect("/login");
 
-  const requestedAthleteId = (await searchParams).athlete;
+  const { athlete: requestedAthleteId, access } = await searchParams;
   const familyContexts = await loadMyFamilyAthleteContexts();
   const athleteResolution = resolveActiveAthleteContext(familyContexts, requestedAthleteId);
   const activeContext = athleteResolution.status === "selected" ? athleteResolution.context : null;
@@ -334,6 +334,8 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
           </div>
         </header>
 
+        {access === "family-management-unavailable" && <p role="alert" className="mb-6 rounded-xl border border-slate-700 bg-slate-900 p-4 text-slate-200">You no longer have permission to manage that family access.</p>}
+
         {athleteResolution.status === "unauthorized_request" || athleteResolution.status === "ambiguous_context" ? (
           <section className="mb-10 rounded-2xl border border-slate-800 bg-slate-900 p-6" aria-labelledby="athlete-context-error">
             <h2 id="athlete-context-error" className="text-2xl font-semibold">Training profile unavailable</h2>
@@ -348,6 +350,8 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
           </section>
         ) : activeContext && (
           <>
+            {access === "child-login-claimed" && activeContext.relationshipRole === "self" && <p role="status" className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-200">Child login is active. You now have self access to this training profile.</p>}
+            {access === "guardian-invitation-accepted" && activeContext.relationshipRole === "guardian" && <p role="status" className="mb-6 rounded-xl border border-emerald-500/40 bg-emerald-500/10 p-4 text-emerald-200">Guardian access is active. You can view this athlete&apos;s training as a guardian.</p>}
             <section className="mb-8 rounded-2xl border border-slate-800 bg-slate-900 p-6" aria-labelledby="active-training-context">
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Training context</p>
               <h2 id="active-training-context" className="mt-2 text-2xl font-semibold">

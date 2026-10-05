@@ -95,14 +95,21 @@ test("unconfirmed and wrong-account paths disclose no athlete identity", async (
   assert.deepEqual(wrong.calls, [{ name: "server_get_child_login_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
-test("confirmed recipient renders only summary fields and supports safe accepted retry", async () => {
-  for (const status of ["pending", "accepted"]) {
-    const { page, calls } = pageFixture({ summary: { athlete_display_name: "Avery", expires_at: "2030-01-01T00:00:00Z", invitation_status: status } });
-    const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token }) }));
-    assert.match(markup, /Avery/);
-    assert.match(markup, status === "accepted" ? /Continue/ : /Claim child login/);
-    assert.deepEqual(calls, [{ name: "server_get_child_login_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
-  }
+test("a consumed child link with a historical summary remains generic after SELF access is revoked", async () => {
+  const { page, calls } = pageFixture({ summary: { athlete_display_name: "Revoked Child", expires_at: "2030-01-01T00:00:00Z", invitation_status: "accepted" } });
+  const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token }) }));
+  assert.match(markup, /This link has already been used/);
+  assert.match(markup, /Continue to dashboard/);
+  assert.doesNotMatch(markup, /Revoked Child|Child login is active|self access|training profile|Claim child login/);
+  assert.doesNotMatch(markup, /\?athlete=/);
+  assert.deepEqual(calls, [{ name: "server_get_child_login_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
+});
+
+test("confirmed recipient renders the athlete-specific claim only while the child link is pending", async () => {
+  const { page, calls } = pageFixture({ summary: { athlete_display_name: "Avery", expires_at: "2030-01-01T00:00:00Z", invitation_status: "pending" } });
+  const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token }) }));
+  assert.match(markup, /Avery|Claim child login/);
+  assert.deepEqual(calls, [{ name: "server_get_child_login_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
 test("acceptance action gives the browser no identity authority and redirects only from the canonical RPC result", async () => {
@@ -114,7 +121,7 @@ test("acceptance action gives the browser no identity authority and redirects on
     "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async (name, args) => { calls.push({ name, args }); return { data: [{ athlete_id: athleteId }], error: null }; } }) },
     "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "recipient", verifiedEmail: "recipient@example.test" }) },
   });
-  await assert.rejects(actions.acceptChildLoginInvitation(token, { status: "idle", message: "" }, new FormData()), new RegExp(`REDIRECT:\\/\\?athlete=${athleteId}`));
+  await assert.rejects(actions.acceptChildLoginInvitation(token, { status: "idle", message: "" }, new FormData()), new RegExp(`REDIRECT:\\/\\?athlete=${athleteId}&access=child-login-claimed`));
   assert.deepEqual(calls, [{ name: "server_accept_child_login_invitation", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
@@ -162,7 +169,8 @@ test("recipient implementation remains RPC-only, token-private, and dynamically 
   assert.match(pageSource, /server_get_child_login_invitation_summary/);
   assert.match(actionsSource, /server_accept_child_login_invitation/);
   assert.match(actionsSource, /parseChildLoginInvitationAcceptance/);
-  assert.match(actionsSource, /redirect\(`\/\?athlete=\$\{encodeURIComponent\(acceptedAthleteId\)\}`\)/);
+  assert.match(actionsSource, /redirect\(`\/\?athlete=\$\{encodeURIComponent\(acceptedAthleteId\)\}&access=child-login-claimed`\)/);
+  assert.match(pageSource, /accepted \? <Link href="\/"/);
   for (const source of [pageSource, actionsSource]) {
     assert.doesNotMatch(source, /\.from\(|\.insert\(|child_login_invitations|athlete_profile_relationships|localStorage|sessionStorage|indexedDB|telemetry/i);
     assert.doesNotMatch(source, /p_athlete_id|p_profile_id|p_email|profileId|athleteId/);

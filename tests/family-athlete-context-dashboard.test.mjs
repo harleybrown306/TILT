@@ -36,7 +36,7 @@ const context = (athleteId, relationshipRole, displayName) => ({
   canAct: false,
 });
 
-function dashboardFixture({ profileId, contexts, memberships = [], requestedAthleteId } = {}) {
+function dashboardFixture({ profileId, contexts, memberships = [], requestedAthleteId, access } = {}) {
   const calls = [];
   const client = {
     auth: { getUser: async () => ({ data: { user: { id: profileId, email: "user@example.test" } }, error: null }) },
@@ -88,13 +88,13 @@ function dashboardFixture({ profileId, contexts, memberships = [], requestedAthl
     },
   }).default;
   return {
-    render: async () => renderToStaticMarkup(await dashboard({ searchParams: Promise.resolve(requestedAthleteId ? { athlete: requestedAthleteId } : {}) })),
+    render: async () => renderToStaticMarkup(await dashboard({ searchParams: Promise.resolve({ ...(requestedAthleteId ? { athlete: requestedAthleteId } : {}), ...(access ? { access } : {}) }) })),
     trainingQueryIds: () => calls.filter((call) => call.table === "training_sessions").flatMap((call) => call.filters.filter(([field]) => field === "athlete_id").map(([, value]) => value)),
   };
 }
 
 test("home validates the optional athlete URL request through the canonical family resolver", () => {
-  assert.match(page, /searchParams: Promise<\{ athlete\?: string \}>/);
+  assert.match(page, /searchParams: Promise<\{ athlete\?: string; access\?: string \}>/);
   assert.match(page, /loadMyFamilyAthleteContexts\(\)/);
   assert.match(page, /resolveActiveAthleteContext\(familyContexts, requestedAthleteId\)/);
 });
@@ -166,6 +166,22 @@ test("guardian dashboard rendering identifies the child and queries the child's 
   assert.ok(markup.includes("Viewing Casey Child as guardian") && markup.includes("Casey Child") && markup.includes("training today"));
   assert.deepEqual(fixture.trainingQueryIds(), [athleteId]);
   assert.ok(!fixture.trainingQueryIds().includes(profileId));
+});
+
+test("completed family-access handoffs confirm only the selected authorized context", async () => {
+  const self = dashboardFixture({ profileId: "PROFILE_A", contexts: [context("ATHLETE_A", "self", "Alex Athlete")], requestedAthleteId: "ATHLETE_A", access: "child-login-claimed" });
+  assert.match(await self.render(), /Child login is active/);
+
+  const guardian = dashboardFixture({ profileId: "PROFILE_G", contexts: [context("ATHLETE_CHILD", "guardian", "Casey Child")], requestedAthleteId: "ATHLETE_CHILD", access: "guardian-invitation-accepted" });
+  assert.match(await guardian.render(), /Guardian access is active/);
+});
+
+test("family-management authorization loss gives a generic recovery message without selecting family data", async () => {
+  const fixture = dashboardFixture({ profileId: "PROFILE_G", contexts: [], access: "family-management-unavailable" });
+  const markup = await fixture.render();
+  assert.match(markup, /You no longer have permission to manage that family access/);
+  assert.doesNotMatch(markup, /Casey Child|Alex Athlete/);
+  assert.deepEqual(fixture.trainingQueryIds(), []);
 });
 
 test("multiple accessible contexts render selected context, role labels, and durable-ID navigation", async () => {

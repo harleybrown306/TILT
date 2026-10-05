@@ -46,5 +46,5 @@ export async function acceptChildLoginInvitation(token: string, state: ChildLogi
     return invoked ? reviewRequired() : { status: "error", message: "Sign in with the invited account." };
   }
   if (!acceptedAthleteId) return reviewRequired();
-  redirect(`/?athlete=${encodeURIComponent(acceptedAthleteId)}`);
+  redirect(`/?athlete=${encodeURIComponent(acceptedAthleteId)}&access=child-login-claimed`);
 }

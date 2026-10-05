@@ -60,10 +60,10 @@ export default async function ChildLoginInvitationPage({ params }: { params: Pro
   return <InvitationShell><Link href="/" className="text-sm font-medium text-emerald-400 hover:text-emerald-300">← Back to dashboard</Link>
     <section className="my-8 rounded-2xl border border-slate-800 bg-slate-900 p-6">
       <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400">Child login invitation</p>
-      <h1 className="mt-3 text-3xl font-bold">{accepted ? `Continue to ${summary.athlete_display_name}` : `Claim login access for ${summary.athlete_display_name}`}</h1>
-      <p className="mt-4 text-slate-400">{accepted ? "Continue to this athlete profile." : "This creates self access for the invited athlete. It does not change family or team permissions."}</p>
+      <h1 className="mt-3 text-3xl font-bold">{accepted ? "This link has already been used" : `Claim login access for ${summary.athlete_display_name}`}</h1>
+      <p className="mt-4 text-slate-400">{accepted ? "Go to your dashboard to see the training currently available to you." : "This gives the child self access to their existing training profile. It does not change family or team permissions."}</p>
       {!accepted && <p className="mt-5 text-sm text-slate-400">Expires {new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" }).format(new Date(summary.expires_at))}</p>}
-      <ChildLoginInvitationAcceptanceForm action={acceptChildLoginInvitation.bind(null, token)} label={accepted ? "Continue" : "Claim child login"} />
+      {accepted ? <Link href="/" className="mt-6 inline-block rounded-xl bg-emerald-500 px-4 py-2 font-semibold text-slate-950">Continue to dashboard</Link> : <ChildLoginInvitationAcceptanceForm action={acceptChildLoginInvitation.bind(null, token)} label="Claim child login" />}
       <div className="mt-6 border-t border-slate-800 pt-5"><RosterActionForm action={switchChildLoginInvitationAccount.bind(null, token)} label="Sign in with another account" /></div>
     </section>
   </InvitationShell>;

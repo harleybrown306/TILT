@@ -46,5 +46,5 @@ export async function acceptGuardianInvitation(token: string, state: GuardianInv
     return invoked ? reviewRequired() : { status: "error", message: "Sign in with the invited account." };
   }
   if (!acceptedAthleteId) return reviewRequired();
-  redirect(`/?athlete=${encodeURIComponent(acceptedAthleteId)}`);
+  redirect(`/?athlete=${encodeURIComponent(acceptedAthleteId)}&access=guardian-invitation-accepted`);
 }

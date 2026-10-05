@@ -143,6 +143,16 @@ test("recipient disclosure is generic before the DB summary email gate and shows
   assert.deepEqual(authorized.calls, [{ name: "server_get_guardian_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
+test("a consumed guardian link with a historical summary remains generic after guardian access is revoked", async () => {
+  const accepted = recipientFixture({ summary: { athlete_display_name: "Revoked Athlete", expires_at: "2030-01-01T00:00:00Z", invitation_status: "accepted" } });
+  const markup = renderToStaticMarkup(await accepted.page({ params: Promise.resolve({ token }) }));
+  assert.match(markup, /This link has already been used/);
+  assert.match(markup, /Continue to dashboard/);
+  assert.doesNotMatch(markup, /Revoked Athlete|Guardian access is active|guardian access|Accept guardian access/);
+  assert.doesNotMatch(markup, /\?athlete=/);
+  assert.deepEqual(accepted.calls, [{ name: "server_get_guardian_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
+});
+
 test("recipient acceptance invokes exactly one RPC and redirects only from its returned durable athlete identity", async () => {
   const calls = [];
   const actions = load("src/app/guardian-invite/[token]/actions.ts", {
@@ -153,7 +163,7 @@ test("recipient acceptance invokes exactly one RPC and redirects only from its r
     "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "recipient", verifiedEmail: "recipient@example.test" }) },
     "@/lib/training-assignment": { isUuid: (value) => /^[0-9a-f-]{36}$/i.test(value) },
   });
-  await assert.rejects(actions.acceptGuardianInvitation(token, idle, new FormData()), (error) => error.message === `REDIRECT:/?athlete=${returnedAthleteId}`);
+  await assert.rejects(actions.acceptGuardianInvitation(token, idle, new FormData()), (error) => error.message === `REDIRECT:/?athlete=${returnedAthleteId}&access=guardian-invitation-accepted`);
   assert.deepEqual(calls, [{ name: "server_accept_guardian_invitation", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
 });
 
@@ -183,4 +193,7 @@ test("guardian UI remains RPC-only and carries no bearer persistence, permission
   assert.match(recipientActionsSource, /getCurrentVerifiedAuthIdentity\(\)/);
   assert.match(recipientActionsSource, /rpc\("server_accept_guardian_invitation"/);
   assert.doesNotMatch(recipientActionsSource, /athleteId|permission|\.from\(|\.insert\(/);
+  assert.match(managerPageSource, /family-management-unavailable/);
+  assert.match(managerPageSource, /Guardian access is active/);
+  assert.doesNotMatch(managerPageSource, /email was sent/i);
 });

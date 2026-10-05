@@ -141,7 +141,16 @@ test("page allows selected guardian or SELF MANAGE contexts but suppresses creat
   const selfMarkup = renderToStaticMarkup(await managerPageFixture(contexts("self", true))({ params: Promise.resolve({ athleteId: athleteA }) }));
   assert.match(selfMarkup, /already has self-login history/);
   assert.doesNotMatch(selfMarkup, /Child email address/);
-  await assert.rejects(managerPageFixture(contexts("self", false))({ params: Promise.resolve({ athleteId: athleteA }) }), /REDIRECT:\//);
+  await assert.rejects(managerPageFixture(contexts("self", false))({ params: Promise.resolve({ athleteId: athleteA }) }), /REDIRECT:\/\?access=family-management-unavailable/);
+});
+
+test("manager guidance describes available, active, revoked, and expired child-login states without implying delivery", () => {
+  assert.match(pageSource, /The child can sign in or create an account with the invited email/);
+  assert.match(pageSource, /Activation link available/);
+  assert.match(pageSource, /Child login is active/);
+  assert.match(pageSource, /Activation link was revoked/);
+  assert.match(pageSource, /Activation link expired/);
+  assert.doesNotMatch(pageSource, /activation is not available yet|email was sent/i);
 });
 
 test("source keeps canonical SELF precedence, profile-to-athlete separation, guardian isolation, and the sealed recipient boundary", () => {
