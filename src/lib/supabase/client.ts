@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { authCallbackOrigin } from "@/lib/auth-callback-origin";
 
 export function createClient() {
   return createBrowserClient(
@@ -12,4 +13,9 @@ export function createClient() {
       },
     }
   );
+}
+
+export function canonicalAuthCallbackUrl(destination: string) {
+  const origin = authCallbackOrigin();
+  return origin ? `${origin}/auth/callback?next=${encodeURIComponent(destination)}` : null;
 }

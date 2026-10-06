@@ -39,7 +39,7 @@ test("account lifecycle source keeps profile, role, and summaries out of browser
   assert.match(signup, /data: \{ full_name: fullName\.trim\(\) \}/);
   assert.doesNotMatch(signup, /platform_role|team_memberships|service_role/);
   assert.match(signup, /auth\.signUp/);
-  assert.match(signup, /auth\/callback/);
+  assert.match(signup, /canonicalAuthCallbackUrl/);
   const callback = readFileSync(root + "src/app/auth/callback/route.ts", "utf8");
   assert.match(callback, /exchangeCodeForSession\(code, flowId \? \{ flowId \} : undefined\)/);
   assert.match(callback, /logOperationalFailure/);
@@ -50,7 +50,7 @@ test("account lifecycle source keeps profile, role, and summaries out of browser
 test("recovery uses callback reset destination and neutral success language", () => {
   const forgot = readFileSync(root + "src/app/forgot-password/page.tsx", "utf8");
   assert.match(forgot, /resetPasswordForEmail/);
-  assert.match(forgot, /auth\/callback\?next=/);
+  assert.match(forgot, /canonicalAuthCallbackUrl\("\/reset-password"\)/);
   assert.match(forgot, /If an account exists for that email/);
   const callback = readFileSync(root + "src/app/auth/callback/route.ts", "utf8");
   assert.match(callback, /redirectType !== "recovery"/);
@@ -89,6 +89,7 @@ function loadCallback({ redirectType, exchangedCookies = [], exchangeError = nul
       },
     },
     "@/lib/auth-continuation": auth,
+    "@/lib/invitation-communication": { configuredApplicationUrl: () => ({ ok: false, reason: "missing" }) },
     "@/lib/operational-log": { createOperationalReference: () => "00000000-0000-4000-8000-000000000010", logOperationalFailure: () => {} },
   });
   return { callback, setCookies, setHeaders, exchangeCalls };
@@ -145,10 +146,11 @@ test("signup preserves validated invitation continuation through the email redir
   const login = readFileSync(root + "src/app/login/page.tsx", "utf8");
   const client = readFileSync(root + "src/lib/supabase/client.ts", "utf8");
   assert.match(signup, /useSearchParams\(\)/);
-  assert.match(signup, /emailRedirectTo:.*encodeURIComponent\(destination\)/);
+  assert.match(signup, /canonicalAuthCallbackUrl\(destination\)/);
   assert.match(login, /useSearchParams\(\)/);
   assert.match(login, /authPath\("\/signup", next\)/);
   assert.match(client, /appendPkceFlowIdToRedirects: true/);
+  assert.match(client, /canonicalAuthCallbackUrl/);
 });
 
 test("reset page keeps recovery intent insufficient without an authenticated user", () => {

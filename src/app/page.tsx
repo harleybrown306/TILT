@@ -463,7 +463,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
               <h2 className="text-2xl font-semibold">Your teams</h2>
               <p className="mt-1 text-sm text-slate-400">Your experience depends on your role within each team.</p>
             </div>
-            <Link href="/teams/new" className="rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950 hover:bg-emerald-400">Create Team</Link>
+            {profile?.platform_role === "admin" && <Link href="/teams/new" className="rounded-xl bg-emerald-500 px-5 py-3 font-semibold text-slate-950 hover:bg-emerald-400">Create Team</Link>}
           </div>
           {teamMemberships.length === 0 ? (
             <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6 text-slate-400">You are not currently a member of a team.</div>
@@ -490,7 +490,7 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
               })}
             </div>
           )}
-          {coachMemberships.length === 0 && !activeContext && <p className="mt-4 text-sm text-slate-500">Join a team or create one to get started.</p>}
+          {coachMemberships.length === 0 && !activeContext && <p className="mt-4 text-sm text-slate-500">Join a team through a closed-beta invitation to get started.</p>}
         </section>
       </div>
     </main>

@@ -17,7 +17,8 @@ function load(path, mocks = {}) {
   return loaded.exports;
 }
 
-const communication = load("src/lib/invitation-communication.ts", { "server-only": {} });
+const origin = load("src/lib/application-origin.ts");
+const communication = load("src/lib/invitation-communication.ts", { "server-only": {}, "@/lib/application-origin": origin });
 const migration = readFileSync(new URL("supabase/migrations/20261005000000_phase20a_invitation_delivery_foundation.sql", root), "utf8");
 
 test("canonical application URL is explicit, origin-only, and production-safe", () => {

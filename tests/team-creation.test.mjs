@@ -35,7 +35,7 @@ function form(name = "  JV   Lacrosse  ") {
 function setup(options = {}) {
   const calls = [], invalidations = [];
   const tables = {
-    profiles: [{ id: userId, full_name: "Test user", platform_role: "user" }],
+    profiles: [{ id: userId, full_name: "Test user", platform_role: options.platformRole ?? "admin" }],
     teams: [{ id: oldTeamId, name: "Original team", created_by_user_id: id(900) }],
     team_memberships: options.zeroTeams ? [] : [{ id: id(4), team_id: oldTeamId, user_id: userId, role: options.existingRole ?? "athlete", created_by_user_id: id(900), teams: { id: oldTeamId, name: "Original team" }, profiles: { id: userId, full_name: "Test user" } }],
     training_sessions: [],
@@ -93,6 +93,7 @@ function setup(options = {}) {
       loadTeamAttentionAttendance: async (teamId) => ({ team: tables.teams.find((team) => team.id === teamId), asOfDate: "2026-09-14", sessions: [], athletes: [] }),
     },
     "@/lib/coach-attention-signals": { deriveCoachAttentionSignals: () => [] },
+    "@/lib/operational-log": { createOperationalReference: () => "reference", logOperationalFailure: () => {} },
     "@/lib/my-athlete-contexts-server": { loadMyFamilyAthleteContexts: async () => [], resolveActiveAthleteContext: () => ({ status: "none" }) },
     "@/lib/athlete-exercise-adherence": {
       athleteExerciseAdherenceInput: () => ({ result: null, attempt: null, prescription: null }),
@@ -141,7 +142,7 @@ for (const options of [{ zeroTeams: true }, { existingRole: "athlete" }, { exist
     assert.equal(membership.role, "coach");
     assert.equal(membership.created_by_user_id, userId);
     assert.deepEqual(fixture.tables.team_memberships.filter((row) => row.team_id !== newTeamId), existing);
-    assert.equal(fixture.tables.profiles[0].platform_role, "user");
+    assert.equal(fixture.tables.profiles[0].platform_role, "admin");
     assert.deepEqual(fixture.invalidations, ["/", `/teams/${newTeamId}`]);
   });
 }
@@ -200,10 +201,12 @@ test("team creation page redirects unauthenticated users", async () => {
   const page = loadTs("src/app/teams/new/page.tsx", { ...fixture.mocks, "./team-form": { default: () => null } }).default;
   await assert.rejects(page(), /REDIRECT:\/login/);
 });
-test("authenticated athlete can open creation page without a global coach role", async () => {
-  const fixture = setup();
+test("non-admin accounts cannot open or submit the closed-beta team creation flow", async () => {
+  const fixture = setup({ platformRole: "user" });
+  assert.equal((await fixture.action(idle, form())).status, "error");
+  assert.equal(writes(fixture).length, 0);
   const page = loadTs("src/app/teams/new/page.tsx", { ...fixture.mocks, "./team-form": { default: () => React.createElement("span", null, "Team form") } }).default;
-  assert.ok(renderToStaticMarkup(await page()).includes("Team form"));
+  await assert.rejects(page(), /REDIRECT:\//);
 });
 function find(node, type) {
   if (!node || typeof node !== "object") return null;

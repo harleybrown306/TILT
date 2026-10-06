@@ -44,6 +44,10 @@ export function deliveryRequestMessage(result: DeliveryBoundaryResult) {
  * after the corresponding invitation creation has committed.
  */
 export async function deliverCreatedInvitation(request: DeliveryRequest, mailer: InvitationMailer = new DisabledInvitationMailer(), reference = createOperationalReference()): Promise<DeliveryBoundaryResult> {
+  // A disabled transport must not require a service-role secret or reserve a
+  // database attempt. The invitation remains usable through its copy-link
+  // fallback until an explicitly selected provider adapter is enabled.
+  if (mailer instanceof DisabledInvitationMailer) return "unavailable";
   const identity = await getCurrentVerifiedAuthIdentity();
   const invitationUrl = canonicalInvitationUrl(request.invitationPath);
   if (!identity || !invitationUrl) return "unavailable";

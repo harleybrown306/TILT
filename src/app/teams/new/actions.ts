@@ -23,6 +23,8 @@ export async function createTeam(state: TeamCreationState, formData: FormData): 
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
     if (authError || !user) return { status: "error", message: "Please sign in before creating a team." };
+    const { data: profile, error: profileError } = await supabase.from("profiles").select("platform_role").eq("id", user.id).single();
+    if (profileError || profile?.platform_role !== "admin") return { status: "error", message: "Team creation is limited to closed-beta administrators." };
     let name: string;
     try { name = readTeamName(formData.get("name")); }
     catch (cause) { return { status: "error", message: cause instanceof Error ? cause.message : "Enter a valid team name." }; }

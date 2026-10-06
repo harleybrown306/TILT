@@ -3,7 +3,7 @@
 import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { authPath, safeAuthContinuation } from "@/lib/auth-continuation";
-import { createClient } from "@/lib/supabase/client";
+import { canonicalAuthCallbackUrl, createClient } from "@/lib/supabase/client";
 
 export default function SignupPage() {
   return <Suspense fallback={<main className="min-h-screen bg-slate-950" />}><SignupForm /></Suspense>;
@@ -26,12 +26,18 @@ function SignupForm() {
     setError("");
     setLoading(true);
     const destination = safeAuthContinuation(next);
+    const emailRedirectTo = canonicalAuthCallbackUrl(destination);
+    if (!emailRedirectTo) {
+      setError("Account signup is temporarily unavailable. Please contact support.");
+      setLoading(false);
+      return;
+    }
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
         data: { full_name: fullName.trim() },
-        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(destination)}`,
+        emailRedirectTo,
       },
     });
     if (error) {

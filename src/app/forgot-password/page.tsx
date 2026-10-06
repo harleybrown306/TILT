@@ -2,7 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { authPath } from "@/lib/auth-continuation";
-import { createClient } from "@/lib/supabase/client";
+import { canonicalAuthCallbackUrl, createClient } from "@/lib/supabase/client";
 
 export default function ForgotPasswordPage() {
   const supabase = createClient();
@@ -12,7 +12,12 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setLoading(true); setError("");
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent("/reset-password")}` });
+    const redirectTo = canonicalAuthCallbackUrl("/reset-password");
+    if (!redirectTo) {
+      setError("Password reset is temporarily unavailable. Please contact support.");
+      return;
+    }
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
     setLoading(false);
     if (error) { setError("We could not request a password reset. Please try again later."); return; }
     setSent(true);

@@ -6,6 +6,9 @@ const sensitiveInvitationResponseHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  ...(process.env.TILT_RELEASE_ID && /^[A-Za-z0-9][A-Za-z0-9._-]{6,63}$/.test(process.env.TILT_RELEASE_ID)
+    ? { deploymentId: process.env.TILT_RELEASE_ID }
+    : {}),
   async headers() {
     return [
       "/invite/:path*",

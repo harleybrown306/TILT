@@ -7,6 +7,8 @@ export default async function NewTeamPage() {
   const supabase = await createClient();
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) redirect("/login");
+  const { data: profile, error: profileError } = await supabase.from("profiles").select("platform_role").eq("id", user.id).single();
+  if (profileError || profile?.platform_role !== "admin") redirect("/");
   return <main className="min-h-screen bg-slate-950 px-6 py-10 text-white">
     <div className="mx-auto max-w-2xl">
       <Link href="/" className="text-sm font-medium text-emerald-400 hover:text-emerald-300">← Back to dashboard</Link>

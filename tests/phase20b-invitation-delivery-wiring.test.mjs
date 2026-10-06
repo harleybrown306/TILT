@@ -19,7 +19,7 @@ function load(path, mocks = {}) {
 
 const boundary = load("src/lib/invitation-delivery-boundary.ts", {
   "server-only": {},
-  "@/lib/invitation-communication": {},
+  "@/lib/invitation-communication": { DisabledInvitationMailer: class {} },
   "@/lib/operational-log": { createOperationalReference: () => "reference", logOperationalFailure: () => {} },
   "@/lib/supabase/service": {},
   "@/lib/verified-auth-identity": {},
@@ -30,7 +30,7 @@ test("delivery status copy is truthful and safe delivery does not undo a created
   assert.match(boundary.deliveryRequestMessage("accepted"), /does not confirm inbox delivery/i);
   assert.match(boundary.deliveryRequestMessage("rejected"), /copy-link fallback/i);
   assert.match(boundary.deliveryRequestMessage("unavailable"), /not configured|could not be confirmed/i);
-  assert.equal(await boundary.attemptCreatedInvitationDelivery({ kind: "guardian", invitationId: "id", invitationPath: "/guardian-invite/x", expiresAt: "2030-01-01T00:00:00Z" }), "ambiguous");
+  assert.equal(await boundary.attemptCreatedInvitationDelivery({ kind: "guardian", invitationId: "id", invitationPath: "/guardian-invite/x", expiresAt: "2030-01-01T00:00:00Z" }), "unavailable");
 });
 
 test("reservation failures remain truthful rather than claiming a rate limit", async () => {
@@ -46,7 +46,7 @@ test("reservation failures remain truthful rather than claiming a rate limit", a
     "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "actor", verifiedEmail: "actor@example.test" }) },
   });
   const request = { kind: "assistant_coach", invitationId: "id", invitationPath: "/invite/token", expiresAt: "2030-01-01T00:00:00Z" };
-  assert.equal(await delivery.deliverCreatedInvitation(request), "ambiguous");
+  assert.equal(await delivery.deliverCreatedInvitation(request, { send: async () => ({ kind: "accepted" }) }), "ambiguous");
 });
 
 test("replacement RPCs atomically revoke the old link before minting a new record", () => {
