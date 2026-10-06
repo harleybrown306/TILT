@@ -4,6 +4,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import type { FamilyInvitationActionState } from "@/components/family-invitation-action-form";
 import { familyInvitationError, familyInvitationPath, normalizeFamilyInvitationEmail } from "@/lib/family-team-invitations";
+import { attemptCreatedInvitationDelivery, deliveryRequestMessage } from "@/lib/invitation-delivery-boundary";
 import { isUuid } from "@/lib/training-assignment";
 import { canManageInvitation, canRemoveMember, normalizeInvitationEmail, type InvitationRole, type RosterState } from "@/lib/team-invitations";
 import { requireRosterManager } from "@/lib/team-roster-server";
@@ -37,16 +38,48 @@ export async function createInvitation(teamId: string, role: InvitationRole, sta
     const tokenHash = createHash("sha256").update(token).digest("hex");
     const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
     writing = true;
+    const invitationId = randomUUID();
     const { error, status } = await context.supabase.from("team_invitations").insert({
-      id: randomUUID(), team_id: teamId, invited_email: email, role, invited_by_user_id: context.user.id,
+      id: invitationId, team_id: teamId, invited_email: email, role, invited_by_user_id: context.user.id,
       token_hash: tokenHash, status: "pending", expires_at: expiresAt,
     });
     if (error) {
       if (!definiteRejection(status)) return uncertain();
       return failure(new Error(error.code === "23505" ? "An equivalent pending invitation already exists. Reload to review it." : "The invitation was rejected. No invitation was created."));
     }
+    const invitationPath = `/invite/${token}`;
+    const delivery = role === "assistant_coach"
+      ? await attemptCreatedInvitationDelivery({ kind: "assistant_coach", invitationId, invitationPath, expiresAt, teamName: context.team.name })
+      : "unavailable";
     invalidate(teamId);
-    return { status: "success", message: "Invitation created. Copy the link now; it cannot be reconstructed later.", invitationPath: `/invite/${token}`, email, role, expiresAt };
+    return { status: "success", message: `Invitation created. ${deliveryRequestMessage(delivery)}`, invitationPath, email, role, expiresAt };
+  } catch (cause) { return writing ? uncertain() : failure(cause); }
+}
+
+export async function replaceAssistantCoachInvitation(teamId: string, invitationId: string, state: RosterState, data: FormData): Promise<RosterState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  let writing = false;
+  try {
+    const context = await requireRosterManager(teamId);
+    if (!isUuid(invitationId)) throw new Error("Invalid invitation.");
+    const email = normalizeInvitationEmail(data.get("email"));
+    const token = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+    writing = true;
+    const { data: created, error, status } = await context.supabase.rpc("replace_assistant_coach_invitation", {
+      p_invitation_id: invitationId, p_invited_email: email, p_token_hash: tokenHash, p_expires_at: expiresAt,
+    });
+    const result = !error && Array.isArray(created) && created.length === 1 && typeof created[0]?.invitation_id === "string" && typeof created[0]?.expires_at === "string"
+      ? created[0] : null;
+    if (!result) {
+      if (!error || !definiteRejection(status)) return uncertain();
+      return failure(new Error("The assistant coach invitation could not be replaced. Reload and review the roster."));
+    }
+    const invitationPath = `/invite/${token}`;
+    const delivery = await attemptCreatedInvitationDelivery({ kind: "assistant_coach", invitationId: result.invitation_id, invitationPath, expiresAt: result.expires_at, teamName: context.team.name });
+    invalidate(teamId);
+    return { status: "success", message: `The old invitation was revoked and a new link was created. ${deliveryRequestMessage(delivery)}`, invitationPath, email, role: "assistant_coach", expiresAt: result.expires_at };
   } catch (cause) { return writing ? uncertain() : failure(cause); }
 }
 
@@ -162,11 +195,41 @@ export async function createFamilyInvitation(teamId: string, state: FamilyInvita
       if (!error || !definiteRejection(status)) return familyInvitationReview();
       return { status: "error", message: familyInvitationError() };
     }
+    const invitationPath = familyInvitationPath(token);
+    const delivery = await attemptCreatedInvitationDelivery({ kind: "family_team", invitationId: created[0].invitation_id, invitationPath, expiresAt: created[0].expires_at, teamName: context.team.name });
     invalidate(teamId);
-    return { status: "success", message: "Family invitation created. Copy the link now; it cannot be reconstructed later.", invitationPath: familyInvitationPath(token), email, expiresAt: created[0].expires_at };
+    return { status: "success", message: `Family invitation created. ${deliveryRequestMessage(delivery)}`, invitationPath, email, expiresAt: created[0].expires_at };
   } catch (cause) {
     if (writing) return familyInvitationReview();
     return { status: "error", message: cause instanceof Error && cause.message === "Enter a valid email address." ? cause.message : familyInvitationError() };
+  }
+}
+
+export async function replaceFamilyInvitation(teamId: string, invitationId: string, state: FamilyInvitationActionState, data: FormData): Promise<FamilyInvitationActionState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  let writing = false;
+  try {
+    const context = await requireRosterManager(teamId);
+    if (!isUuid(invitationId)) return { status: "error", message: "This invitation is unavailable." };
+    const email = normalizeFamilyInvitationEmail(data.get("email"));
+    const token = randomBytes(48).toString("base64url");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const expiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+    writing = true;
+    const { data: created, error, status } = await context.supabase.rpc("replace_family_team_invitation", {
+      p_invitation_id: invitationId, p_invited_email: email, p_token_hash: tokenHash, p_expires_at: expiresAt,
+    });
+    if (error || !created?.[0]?.invitation_id || typeof created[0].expires_at !== "string") {
+      if (!error || !definiteRejection(status)) return familyInvitationReview();
+      return { status: "error", message: "This family invitation could not be replaced. Reload and review the invitation list." };
+    }
+    const invitationPath = familyInvitationPath(token);
+    const delivery = await attemptCreatedInvitationDelivery({ kind: "family_team", invitationId: created[0].invitation_id, invitationPath, expiresAt: created[0].expires_at, teamName: context.team.name });
+    invalidate(teamId);
+    return { status: "success", message: `The old invitation was revoked and a new link was created. ${deliveryRequestMessage(delivery)}`, invitationPath, email, expiresAt: created[0].expires_at };
+  } catch (cause) {
+    if (writing) return familyInvitationReview();
+    return { status: "error", message: cause instanceof Error && cause.message === "Enter a valid email address." ? cause.message : "This family invitation could not be replaced." };
   }
 }
 

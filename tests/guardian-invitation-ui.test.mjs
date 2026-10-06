@@ -41,6 +41,7 @@ function managerFixture({ result = [{ invitation_id: invitationId, expires_at: "
     "node:crypto": awaitableCrypto,
     "next/cache": { revalidatePath: (path) => invalidated.push(path) },
     "@/lib/guardian-invitations": guardian,
+    "@/lib/invitation-delivery-boundary": { attemptCreatedInvitationDelivery: async () => "unavailable", deliveryRequestMessage: () => "Use the copy-link fallback." },
     "@/lib/supabase/server": { createClient: async () => ({ auth: { getUser: async () => ({ data: { user: signedOut ? null : { id: "manager" } }, error: null }) }, rpc: async (name, args) => { calls.push({ name, args }); return name === "revoke_guardian_invitation" ? { data: null, error, status } : { data: result, error, status }; } }) },
     "@/lib/training-assignment": { isUuid: (value) => /^[0-9a-f-]{36}$/i.test(value) },
   });

@@ -6,7 +6,7 @@ import { readAllRows } from "@/lib/training-assignment";
 import { familyInvitationStatus, type FamilyInvitationSummary } from "@/lib/family-team-invitations";
 import { canManageInvitation, effectiveInvitationStatus, formatInvitationDate } from "@/lib/team-invitations";
 import { loadDurableRoster, loadManagedAthletes, loadRoster, requireRosterManager, type DurableAthlete, type RosterMember } from "@/lib/team-roster-server";
-import { addManagedAthleteToTeam, createFamilyInvitation, createInvitation, createManagedAthlete, revokeFamilyInvitation, revokeInvitation } from "./actions";
+import { addManagedAthleteToTeam, createFamilyInvitation, createInvitation, createManagedAthlete, replaceAssistantCoachInvitation, replaceFamilyInvitation, revokeFamilyInvitation, revokeInvitation } from "./actions";
 
 type PendingInvitation = { id: string; invited_email: string; role: string; status: string; created_at: string; expires_at: string };
 type FamilyInvitation = { id: string; invited_email: string; status: FamilyInvitationSummary["invitation_status"]; created_at: string; expires_at: string };
@@ -54,7 +54,7 @@ export default async function RosterPage({ params }: { params: Promise<{ teamId:
           {!familyInvitations.length ? <p className="mt-3 text-sm text-slate-400">No family invitations yet.</p> : <div className="mt-4 space-y-3">{familyInvitations.map((invitation) => {
             const status = familyInvitationStatus({ invitation_status: invitation.status, expires_at: invitation.expires_at });
             return <article key={invitation.id} className="rounded-xl border border-slate-700 bg-slate-950 p-4"><p className="font-medium">{invitation.invited_email}</p><p className="mt-1 text-sm capitalize text-slate-400">{status} · Expires {formatInvitationDate(invitation.expires_at)}</p>
-              {status === "pending" && <div className="mt-3"><FamilyInvitationActionForm action={revokeFamilyInvitation.bind(null, teamId, invitation.id)} label="Revoke invitation" confirmation="Revoke this family invitation? The link will stop working." /></div>}
+              {status === "pending" && <div className="mt-3 space-y-4"><FamilyInvitationActionForm action={replaceFamilyInvitation.bind(null, teamId, invitation.id)} label="Replace and attempt delivery" confirmation="Replace this invitation? The old link will stop working and a new one will be created." linkDescription="Copy the new link as a fallback; a delivery request is not inbox confirmation."><label className="block text-sm text-slate-400">Recipient email<input name="email" type="email" required defaultValue={invitation.invited_email} maxLength={254} autoComplete="email" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-white" /></label></FamilyInvitationActionForm><FamilyInvitationActionForm action={revokeFamilyInvitation.bind(null, teamId, invitation.id)} label="Revoke invitation" confirmation="Revoke this family invitation? The link will stop working." /></div>}
             </article>;
           })}</div>}
         </div>
@@ -88,12 +88,13 @@ export default async function RosterPage({ params }: { params: Promise<{ teamId:
         </section>;
       })}
       <section><h2 className="mb-4 text-2xl font-semibold">Pending Invitations</h2>
-        <p className="mb-4 text-sm text-slate-400">Old invitation URLs cannot be reconstructed. Revoke a pending or expired link before creating a replacement.</p>
+        <p className="mb-4 text-sm text-slate-400">Replacing an assistant coach invitation revokes its old link and mints a new one. Legacy athlete invitations are not recreated here.</p>
         {!invitations.length ? <p className="text-slate-400">No pending invitations.</p> : <div className="space-y-4">{invitations.map((invitation) => <article key={invitation.id} className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
           <h3 className="font-semibold">{invitation.invited_email}</h3><p className="mt-2 capitalize text-slate-400">{invitation.role.replace("_", " ")} · {effectiveInvitationStatus(invitation.status, invitation.expires_at)}</p>
           <p className="my-3 text-sm text-slate-400">Invited {formatInvitationDate(invitation.created_at)} · Expires {formatInvitationDate(invitation.expires_at)}</p>
           {invitation.role === "athlete" && <p className="my-3 text-sm text-slate-400">This legacy invitation adds team membership only; it does not set up training.</p>}
-          {canManageInvitation(context.managerRole, invitation.role) && <RosterActionForm action={revokeInvitation.bind(null, teamId, invitation.id)} label="Revoke Invitation" confirmation="Revoke this invitation? The link will stop working." />}
+          {invitation.role === "assistant_coach" && canManageInvitation(context.managerRole, invitation.role) && <div className="space-y-4"><RosterActionForm action={replaceAssistantCoachInvitation.bind(null, teamId, invitation.id)} label="Replace and attempt delivery" confirmation="Replace this invitation? The old link will stop working and a new one will be created."><label className="block text-sm text-slate-400">Recipient email<input name="email" type="email" required defaultValue={invitation.invited_email} maxLength={254} autoComplete="email" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-white" /></label></RosterActionForm><RosterActionForm action={revokeInvitation.bind(null, teamId, invitation.id)} label="Revoke Invitation" confirmation="Revoke this invitation? The link will stop working." /></div>}
+          {invitation.role !== "assistant_coach" && canManageInvitation(context.managerRole, invitation.role) && <RosterActionForm action={revokeInvitation.bind(null, teamId, invitation.id)} label="Revoke Invitation" confirmation="Revoke this invitation? The link will stop working." />}
         </article>)}</div>}
       </section>
     </>}

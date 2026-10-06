@@ -58,6 +58,7 @@ function actionFixture({ familyContexts = contexts(), response = { data: [{ invi
     "next/cache": { revalidatePath: (path) => invalidated.push(path) },
     "@/components/family-invitation-action-form": {},
     "@/lib/child-login-invitations": childLogin,
+    "@/lib/invitation-delivery-boundary": { attemptCreatedInvitationDelivery: async () => "unavailable", deliveryRequestMessage: () => "Use the copy-link fallback." },
     "@/lib/my-athlete-contexts-server": { loadMyFamilyAthleteContexts: async () => familyContexts },
     "@/lib/supabase/server": { createClient: async () => ({ rpc: async (name, args) => { calls.push({ name, args }); return name === "revoke_child_login_invitation" ? { data: null, error: response.error, status: response.status } : response; } }) },
     "@/lib/training-assignment": { isUuid: uuid },

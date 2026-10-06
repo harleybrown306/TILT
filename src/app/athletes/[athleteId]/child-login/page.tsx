@@ -6,7 +6,7 @@ import { loadMyFamilyAthleteContexts } from "@/lib/my-athlete-contexts-server";
 import { createClient } from "@/lib/supabase/server";
 import { formatInvitationDate } from "@/lib/team-invitations";
 import { isUuid } from "@/lib/training-assignment";
-import { createChildLoginInvitation, revokeChildLoginInvitation } from "./actions";
+import { createChildLoginInvitation, replaceChildLoginInvitation, revokeChildLoginInvitation } from "./actions";
 
 function childLoginStatusLabel(status: ChildLoginInvitationListItem["invitation_status"]) {
   if (status === "pending") return "Activation link available";
@@ -43,7 +43,7 @@ export default async function ChildLoginManagementPage({ params }: { params: Pro
     </section>
     <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6"><h2 className="text-xl font-semibold">Child login invitations</h2>
       {failed ? <p role="alert" className="mt-3 text-rose-300">Unable to load child login invitations. Reload before managing access.</p> : !invitations.length ? <p className="mt-3 text-sm text-slate-400">No child login invitations yet.</p> : <div className="mt-4 space-y-3">{invitations.map((invitation) => <article key={invitation.invitation_id} className="rounded-xl border border-slate-700 bg-slate-950 p-4"><p className="font-medium">{invitation.invited_email}</p><p className="mt-1 text-sm text-slate-400">{childLoginStatusLabel(invitation.invitation_status)} · Created {formatInvitationDate(invitation.created_at)} · Expires {formatInvitationDate(invitation.expires_at)}</p>
-        {invitation.invitation_status === "pending" && <div className="mt-3"><FamilyInvitationActionForm action={revokeChildLoginInvitation.bind(null, athleteId, invitation.invitation_id)} label="Revoke invitation" confirmation="Revoke this child login invitation? The link will stop working." /></div>}
+        {invitation.invitation_status === "pending" && <div className="mt-3 space-y-4"><FamilyInvitationActionForm action={replaceChildLoginInvitation.bind(null, athleteId, invitation.invitation_id)} label="Replace and attempt delivery" confirmation="Replace this invitation? The old link will stop working and a new one will be created." linkDescription="Copy the new link as a fallback; a delivery request is not inbox confirmation."><label className="block text-sm text-slate-400">Child email<input name="email" type="email" required defaultValue={invitation.invited_email} maxLength={254} autoComplete="email" className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950 p-3 text-white" /></label></FamilyInvitationActionForm><FamilyInvitationActionForm action={revokeChildLoginInvitation.bind(null, athleteId, invitation.invitation_id)} label="Revoke invitation" confirmation="Revoke this child login invitation? The link will stop working." /></div>}
       </article>)}</div>}
     </section>
   </div></main>;

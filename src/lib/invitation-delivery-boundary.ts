@@ -15,6 +15,27 @@ type DeliveryRequest = {
 };
 
 /**
+ * Creation is already committed when this boundary is reached. A delivery
+ * problem must never turn that successful creation into a failed action or
+ * hide its manual copy-link fallback.
+ */
+export async function attemptCreatedInvitationDelivery(request: DeliveryRequest, mailer?: InvitationMailer): Promise<DeliveryBoundaryResult> {
+  try {
+    return await deliverCreatedInvitation(request, mailer);
+  } catch {
+    return "ambiguous";
+  }
+}
+
+export function deliveryRequestMessage(result: DeliveryBoundaryResult) {
+  if (result === "accepted") return "The delivery request was accepted by the transport. This does not confirm inbox delivery; keep the copy-link fallback available.";
+  if (result === "rejected") return "The transport rejected delivery. Use the copy-link fallback.";
+  if (result === "rate_limited") return "Delivery is temporarily rate limited. Use the copy-link fallback.";
+  if (result === "unavailable") return "Delivery is not configured or could not be confirmed. Use the copy-link fallback.";
+  return "Delivery could not be confirmed. Use the copy-link fallback.";
+}
+
+/**
  * Internal-only boundary for a future post-commit send-on-create path. It accepts
  * neither a recipient chosen at resend time nor a request origin. Call it only
  * after the corresponding invitation creation has committed.
@@ -31,7 +52,9 @@ export async function deliverCreatedInvitation(request: DeliveryRequest, mailer:
     p_invitation_id: request.invitationId,
   });
   const recipient = reserved.data?.[0]?.recipient;
-  if (reserved.error || reserved.data?.[0]?.result !== "reserved" || typeof recipient !== "string") return "rate_limited";
+  if (reserved.error) return "ambiguous";
+  if (reserved.data?.[0]?.result === "unavailable") return "unavailable";
+  if (reserved.data?.[0]?.result !== "reserved" || typeof recipient !== "string") return "rate_limited";
   const outcome = await mailer.send(renderInvitationEmail({ ...request, recipient, invitationUrl }));
   if (outcome.kind === "accepted") {
     // Provider acceptance is not inbox delivery confirmation.

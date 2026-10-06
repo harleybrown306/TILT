@@ -9,6 +9,7 @@ import {
   normalizeChildLoginInvitationEmail,
   parseChildLoginInvitationCreate,
 } from "@/lib/child-login-invitations";
+import { attemptCreatedInvitationDelivery, deliveryRequestMessage } from "@/lib/invitation-delivery-boundary";
 import { loadMyFamilyAthleteContexts } from "@/lib/my-athlete-contexts-server";
 import { createClient } from "@/lib/supabase/server";
 import { isUuid } from "@/lib/training-assignment";
@@ -60,11 +61,13 @@ export async function createChildLoginInvitation(athleteId: string, state: Famil
         ? { status: "error", message: rejectedMessage(error.message) }
         : reviewRequired();
     }
+    const invitationPath = childLoginInvitationPath(token);
+    const delivery = await attemptCreatedInvitationDelivery({ kind: "child_self_login", invitationId: result.invitation_id, invitationPath, expiresAt: result.expires_at });
     revalidatePath(childLoginPath(athleteId));
     return {
       status: "success",
-      message: "Child self-login invitation created. Copy the link now; it cannot be reconstructed later.",
-      invitationPath: childLoginInvitationPath(token),
+      message: `Child self-login invitation created. ${deliveryRequestMessage(delivery)}`,
+      invitationPath,
       email,
       expiresAt: result.expires_at,
     };
@@ -76,6 +79,34 @@ export async function createChildLoginInvitation(athleteId: string, state: Famil
         ? cause.message
         : "You no longer have permission to manage login invitations for this athlete.",
     };
+  }
+}
+
+export async function replaceChildLoginInvitation(athleteId: string, invitationId: string, state: FamilyInvitationActionState, data: FormData): Promise<FamilyInvitationActionState> {
+  if (state.status === "success" || state.status === "review_required") return state;
+  let writing = false;
+  try {
+    await requireChildLoginManager(athleteId);
+    if (!isUuid(invitationId)) return { status: "error", message: "This invitation is unavailable." };
+    const email = normalizeChildLoginInvitationEmail(data.get("email"));
+    const token = randomBytes(48).toString("base64url");
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const supabase = await createClient();
+    writing = true;
+    const { data: created, error, status } = await supabase.rpc("replace_child_login_invitation", {
+      p_invitation_id: invitationId, p_invited_email: email, p_token_hash: tokenHash,
+    });
+    const result = error ? null : parseChildLoginInvitationCreate(created);
+    if (!result) return error && definitelyRejected(status)
+      ? { status: "error", message: rejectedMessage(error.message) }
+      : reviewRequired();
+    const invitationPath = childLoginInvitationPath(token);
+    const delivery = await attemptCreatedInvitationDelivery({ kind: "child_self_login", invitationId: result.invitation_id, invitationPath, expiresAt: result.expires_at });
+    revalidatePath(childLoginPath(athleteId));
+    return { status: "success", message: `The old invitation was revoked and a new link was created. ${deliveryRequestMessage(delivery)}`, invitationPath, email, expiresAt: result.expires_at };
+  } catch (cause) {
+    if (writing) return reviewRequired();
+    return { status: "error", message: cause instanceof Error && cause.message === "Enter a valid email address." ? cause.message : "You no longer have permission to manage login invitations for this athlete." };
   }
 }
 

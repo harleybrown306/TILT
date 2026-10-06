@@ -36,11 +36,12 @@ function setup({ manager = true, rpcError = null } = {}) {
   const actions = load("src/app/teams/[teamId]/roster/actions.ts", {
     "next/cache": { revalidatePath: (path) => invalidations.push(path) },
     "@/lib/family-team-invitations": family,
+    "@/lib/invitation-delivery-boundary": { attemptCreatedInvitationDelivery: async () => "unavailable", deliveryRequestMessage: () => "Use the copy-link fallback." },
     "@/lib/training-assignment": { isUuid: (value) => value === invitationId },
     "@/lib/team-invitations": { canManageInvitation: () => true, canRemoveMember: () => true, normalizeInvitationEmail: () => "legacy@example.com" },
     "@/lib/team-roster-server": { requireRosterManager: async () => {
       if (!manager) throw Error("not authorized");
-      return { user: { id: "manager", email: "manager@example.com" }, supabase: client };
+      return { user: { id: "manager", email: "manager@example.com" }, team: { name: "Team" }, supabase: client };
     } },
   });
   return { actions, calls, invalidations };

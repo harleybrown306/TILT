@@ -98,6 +98,7 @@ function setup(options = {}) {
       if (typeof value !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) throw Error("Enter a valid email address.");
       return value.trim().toLowerCase();
     } },
+    "@/lib/invitation-delivery-boundary": { attemptCreatedInvitationDelivery: async () => "unavailable", deliveryRequestMessage: () => "Use the copy-link fallback." },
     "next/cache": { revalidatePath: (path) => invalidations.push(path) },
     "next/navigation": { redirect: (path) => { throw Error(`REDIRECT:${path}`); } },
     "next/link": { default: (props) => React.createElement("a", props) },
