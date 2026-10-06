@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import GuardianInvitationAcceptanceForm from "@/components/guardian-invitation-acceptance-form";
@@ -6,6 +7,8 @@ import { guardianInvitationLoginPath, guardianInvitationStatus, isGuardianInvita
 import { createServiceClient } from "@/lib/supabase/service";
 import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 import { acceptGuardianInvitation, switchGuardianInvitationAccount } from "./actions";
+
+export const metadata: Metadata = { referrer: "no-referrer" };
 
 function unavailableMessage(status: ReturnType<typeof guardianInvitationStatus>) {
   if (status === "expired") return "This invitation has expired. Ask the guardian who invited you for a new link.";

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import ChildLoginInvitationAcceptanceForm from "@/components/child-login-invitation-acceptance-form";
@@ -10,6 +11,7 @@ import { acceptChildLoginInvitation, switchChildLoginInvitationAccount } from ".
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const metadata: Metadata = { referrer: "no-referrer" };
 
 function unavailableMessage(status: ReturnType<typeof childLoginInvitationStatus>) {
   if (status === "expired" || status === "revoked") return "This invitation is unavailable.";

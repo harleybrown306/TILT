@@ -1,9 +1,12 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import RosterActionForm from "@/components/roster-action-form";
 import { createClient } from "@/lib/supabase/server";
 import { canAcceptInvitation, formatInvitationDate, invitationLoginPath, isInvitationToken, type InvitationSummary } from "@/lib/team-invitations";
 import { acceptInvitation, switchInvitationAccount } from "./actions";
+
+export const metadata: Metadata = { referrer: "no-referrer" };
 
 export default async function InvitationPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;

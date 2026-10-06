@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import FamilyInvitationAcceptanceForm from "@/components/family-invitation-acceptance-form";
@@ -11,6 +12,8 @@ import {
   type FamilyInvitationSummary,
 } from "@/lib/family-team-invitations";
 import { acceptFamilyTeamInvitation, switchFamilyInvitationAccount } from "./actions";
+
+export const metadata: Metadata = { referrer: "no-referrer" };
 
 function unavailableMessage(status: ReturnType<typeof familyInvitationStatus>) {
   if (status === "expired") return "This invitation has expired. Ask the team for a new invitation.";
