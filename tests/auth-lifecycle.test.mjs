@@ -42,10 +42,9 @@ test("account lifecycle source keeps profile, role, and summaries out of browser
   assert.match(signup, /auth\/callback/);
   const callback = readFileSync(root + "src/app/auth/callback/route.ts", "utf8");
   assert.match(callback, /exchangeCodeForSession\(code, flowId \? \{ flowId \} : undefined\)/);
-  assert.match(callback, /\[TILT auth callback diagnostic\]/);
-  assert.match(callback, /codePresent: Boolean\(code\)/);
-  assert.match(callback, /flowIdPresent: Boolean\(flowId\)/);
-  assert.doesNotMatch(callback, /console\.(?:info|error)\([^\n]*(?:code,|flowId,|destination,|url,|cookie)/);
+  assert.match(callback, /logOperationalFailure/);
+  assert.doesNotMatch(callback, /console\.(?:info|error)/);
+  assert.doesNotMatch(callback, /error\.message|errorMessage/);
 });
 
 test("recovery uses callback reset destination and neutral success language", () => {
@@ -88,6 +87,7 @@ function loadCallback({ redirectType, exchangedCookies = [], exchangeError = nul
       },
     },
     "@/lib/auth-continuation": auth,
+    "@/lib/operational-log": { createOperationalReference: () => "00000000-0000-4000-8000-000000000010", logOperationalFailure: () => {} },
   });
   return { callback, setCookies, exchangeCalls };
 }
@@ -113,17 +113,10 @@ test("signup confirmation passes its PKCE flow ID and preserves its invitation c
   assert.deepEqual(exchangeCalls, [{ flowId: "abcDEF12" }]);
 });
 
-test("callback preserves child-login invitations while diagnostics categorize them without the token", async () => {
+test("callback preserves child-login invitations without adding token-bearing diagnostics", async () => {
   const { callback } = loadCallback({ redirectType: null });
-  const logs = [];
-  const original = console.info;
-  console.info = (...values) => logs.push(values);
-  try {
-    const response = await callback.GET(new Request(`https://tilt.test/auth/callback?code=signup-code&next=${encodeURIComponent(`/child-login-invite/${token}`)}`));
-    assert.equal(response.url, `https://tilt.test/child-login-invite/${token}`);
-  } finally { console.info = original; }
-  assert.deepEqual(logs[0][1], { codePresent: true, flowIdPresent: false, continuation: "invite" });
-  assert.doesNotMatch(JSON.stringify(logs), new RegExp(token));
+  const response = await callback.GET(new Request(`https://tilt.test/auth/callback?code=signup-code&next=${encodeURIComponent(`/child-login-invite/${token}`)}`));
+  assert.equal(response.url, `https://tilt.test/child-login-invite/${token}`);
 });
 
 test("ordinary signup confirms to root and missing or failed exchanges fail safely", async () => {
@@ -132,7 +125,13 @@ test("ordinary signup confirms to root and missing or failed exchanges fail safe
   const missing = loadCallback({ redirectType: null });
   assert.equal((await missing.callback.GET(new Request("https://tilt.test/auth/callback?next=/"))).url, "https://tilt.test/login?auth=error");
   const failed = loadCallback({ redirectType: null, exchangeError: { message: "invalid" } });
-  assert.equal((await failed.callback.GET(new Request("https://tilt.test/auth/callback?code=bad&next=/"))).url, "https://tilt.test/login?auth=error");
+  assert.equal((await failed.callback.GET(new Request("https://tilt.test/auth/callback?code=bad&next=/"))).url, "https://tilt.test/login?auth=error&reference=00000000-0000-4000-8000-000000000010");
+});
+
+test("expected auth callback rejection does not masquerade as an operational failure", async () => {
+  const expected = loadCallback({ redirectType: null, exchangeError: { status: 400 } });
+  const response = await expected.callback.GET(new Request("https://tilt.test/auth/callback?code=expired&next=/"));
+  assert.equal(response.url, "https://tilt.test/login?auth=error");
 });
 
 test("signup preserves validated invitation continuation through the email redirect", () => {

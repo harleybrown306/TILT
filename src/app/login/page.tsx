@@ -14,6 +14,8 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const supabase = createClient();
   const next = searchParams.get("next");
+  const reference = searchParams.get("reference");
+  const safeReference = reference && /^[0-9a-f-]{36}$/i.test(reference) ? reference : null;
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -111,7 +113,8 @@ function LoginForm() {
 
           {error && (
             <div className="rounded-lg border border-red-900 bg-red-950/50 p-3 text-sm text-red-300">
-              {error}
+              <p>{error}</p>
+              {safeReference && <p className="mt-2 text-xs text-red-200">Support reference: {safeReference}</p>}
             </div>
           )}
 

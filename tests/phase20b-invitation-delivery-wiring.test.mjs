@@ -20,6 +20,7 @@ function load(path, mocks = {}) {
 const boundary = load("src/lib/invitation-delivery-boundary.ts", {
   "server-only": {},
   "@/lib/invitation-communication": {},
+  "@/lib/operational-log": { createOperationalReference: () => "reference", logOperationalFailure: () => {} },
   "@/lib/supabase/service": {},
   "@/lib/verified-auth-identity": {},
 });
@@ -40,6 +41,7 @@ test("reservation failures remain truthful rather than claiming a rate limit", a
       DisabledInvitationMailer: class {},
       renderInvitationEmail: () => ({ to: "recipient@example.test", subject: "TILT", text: "link" }),
     },
+    "@/lib/operational-log": { createOperationalReference: () => "reference", logOperationalFailure: () => {} },
     "@/lib/supabase/service": { createServiceClient: () => ({ rpc: async () => ({ data: null, error: { message: "connection lost" } }) }) },
     "@/lib/verified-auth-identity": { getCurrentVerifiedAuthIdentity: async () => ({ authUserId: "actor", verifiedEmail: "actor@example.test" }) },
   });

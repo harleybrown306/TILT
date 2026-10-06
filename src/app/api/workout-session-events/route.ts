@@ -3,13 +3,25 @@ import {
   EventPayloadError, MAX_EVENT_BODY_BYTES, parseEventBatch, sameEvent,
   type WorkoutSessionEvent,
 } from "@/lib/workout-session-events";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 
 type Acknowledgement = {
   id: string;
   status: "accepted" | "duplicate" | "conflict" | "rejected" | "retry";
 };
-function reply(body: unknown, status = 200) {
-  return Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+function reply(body: Record<string, unknown>, status = 200, reference?: string) {
+  return Response.json(reference ? { ...body, reference } : body, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      ...(reference ? { "X-TILT-Operation-Reference": reference } : {}),
+    },
+  });
+}
+
+function isExpectedAuthenticationRejection(error: unknown) {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" && status >= 400 && status < 500 && status !== 408;
 }
 
 async function readPayload(request: Request): Promise<unknown> {
@@ -41,6 +53,7 @@ async function readPayload(request: Request): Promise<unknown> {
 }
 
 export async function POST(request: Request) {
+  const reference = createOperationalReference();
   // Do not trust forwarded-host headers or accept cross-origin cookie writes.
   if (request.headers.get("origin") !== new URL(request.url).origin ||
       (request.headers.has("sec-fetch-site") && request.headers.get("sec-fetch-site") !== "same-origin")) {
@@ -52,18 +65,27 @@ export async function POST(request: Request) {
   try {
     const supabase = await createClient();
     const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) return reply({ error: "Authentication required." }, 401);
+    if (authError) {
+      if (isExpectedAuthenticationRejection(authError)) return reply({ error: "Authentication required." }, 401);
+      logOperationalFailure({ reference, surface: "workout_event_ingest", code: "workout_event_auth_unavailable" });
+      return reply({ error: "Authentication is temporarily unavailable. Retry safely." }, 503, reference);
+    }
+    if (!user) return reply({ error: "Authentication required." }, 401);
     const events = parseEventBatch(await readPayload(request));
     const sessionIds = [...new Set(events.map((event) => event.session_id))];
     const { data: sessions, error: sessionError } = await supabase.from("training_sessions")
       // Session RLS establishes documented VIEW. Event INSERT RLS independently
       // establishes ACT for every event under this same authenticated caller.
       .select("id").in("id", sessionIds);
-    if (sessionError) return reply({ error: "Unable to verify sessions. Retry safely." }, 503);
+    if (sessionError) {
+      logOperationalFailure({ reference, surface: "workout_event_ingest", code: "workout_event_session_verification_failed" });
+      return reply({ error: "Unable to verify sessions. Retry safely." }, 503, reference);
+    }
     if (!sessions || sessionIds.some((id) => !sessions.some((session) => session.id === id))) {
       return reply({ error: "Session unavailable for telemetry." }, 403);
     }
 
+    let retryableFailure = false;
     async function insertEvent(event: WorkoutSessionEvent): Promise<Acknowledgement> {
       try {
         // Individual inserts allow partial acknowledgements without one invalid
@@ -75,21 +97,32 @@ export async function POST(request: Request) {
             .select("id,session_id,attempt_id,sequence,event_type,workout_exercise_id,step_position,phase,phase_duration_ms,phase_elapsed_ms,elapsed_ms,occurred_at")
             .or(`id.eq.${event.id},and(session_id.eq.${event.session_id},attempt_id.eq.${event.attempt_id},sequence.eq.${event.sequence})`)
             .limit(2);
-          if (readError) return { id: event.id, status: "retry" };
+          if (readError) {
+            retryableFailure = true;
+            return { id: event.id, status: "retry" };
+          }
           return { id: event.id, status: data?.length === 1 && sameEvent(data[0], event) ? "duplicate" : "conflict" };
         }
-        return { id: event.id, status: ["42501", "23514", "23503", "22003"].includes(error.code) ? "rejected" : "retry" };
-      } catch { return { id: event.id, status: "retry" }; }
+        const retry = !["42501", "23514", "23503", "22003"].includes(error.code);
+        if (retry) retryableFailure = true;
+        return { id: event.id, status: retry ? "retry" : "rejected" };
+      } catch {
+        retryableFailure = true;
+        return { id: event.id, status: "retry" };
+      }
     }
     const acknowledgements: Acknowledgement[] = [];
     // Bound database concurrency, including duplicate lookup requests.
     for (let index = 0; index < events.length; index += 4) {
       acknowledgements.push(...await Promise.all(events.slice(index, index + 4).map(insertEvent)));
     }
+    if (retryableFailure) {
+      logOperationalFailure({ reference, surface: "workout_event_ingest", code: "workout_event_batch_retryable_failure" });
+    }
     return reply({ acknowledgements });
   } catch (error) {
     return error instanceof EventPayloadError
       ? reply({ error: error.message }, error.status)
-      : reply({ error: "Telemetry unavailable. Retry safely." }, 503);
+      : (logOperationalFailure({ reference, surface: "workout_event_ingest", code: "workout_event_unexpected_failure" }), reply({ error: "Telemetry unavailable. Retry safely." }, 503, reference));
   }
 }

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { canonicalInvitationUrl, DisabledInvitationMailer, renderInvitationEmail, type InvitationKind, type InvitationMailer } from "@/lib/invitation-communication";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 
@@ -20,9 +21,11 @@ type DeliveryRequest = {
  * hide its manual copy-link fallback.
  */
 export async function attemptCreatedInvitationDelivery(request: DeliveryRequest, mailer?: InvitationMailer): Promise<DeliveryBoundaryResult> {
+  const reference = createOperationalReference();
   try {
-    return await deliverCreatedInvitation(request, mailer);
+    return await deliverCreatedInvitation(request, mailer, reference);
   } catch {
+    logOperationalFailure({ reference, surface: "invitation_delivery", code: "invitation_delivery_unexpected_failure" });
     return "ambiguous";
   }
 }
@@ -40,7 +43,7 @@ export function deliveryRequestMessage(result: DeliveryBoundaryResult) {
  * neither a recipient chosen at resend time nor a request origin. Call it only
  * after the corresponding invitation creation has committed.
  */
-export async function deliverCreatedInvitation(request: DeliveryRequest, mailer: InvitationMailer = new DisabledInvitationMailer()): Promise<DeliveryBoundaryResult> {
+export async function deliverCreatedInvitation(request: DeliveryRequest, mailer: InvitationMailer = new DisabledInvitationMailer(), reference = createOperationalReference()): Promise<DeliveryBoundaryResult> {
   const identity = await getCurrentVerifiedAuthIdentity();
   const invitationUrl = canonicalInvitationUrl(request.invitationPath);
   if (!identity || !invitationUrl) return "unavailable";
@@ -52,18 +55,24 @@ export async function deliverCreatedInvitation(request: DeliveryRequest, mailer:
     p_invitation_id: request.invitationId,
   });
   const recipient = reserved.data?.[0]?.recipient;
-  if (reserved.error) return "ambiguous";
+  if (reserved.error) {
+    logOperationalFailure({ reference, surface: "invitation_delivery", code: "invitation_delivery_reservation_failed" });
+    return "ambiguous";
+  }
   if (reserved.data?.[0]?.result === "unavailable") return "unavailable";
   if (reserved.data?.[0]?.result !== "reserved" || typeof recipient !== "string") return "rate_limited";
   const outcome = await mailer.send(renderInvitationEmail({ ...request, recipient, invitationUrl }));
   if (outcome.kind === "accepted") {
     // Provider acceptance is not inbox delivery confirmation.
-    await service.rpc("server_mark_invitation_delivery_accepted", {
+    const acknowledged = await service.rpc("server_mark_invitation_delivery_accepted", {
       p_auth_user_id: identity.authUserId,
       p_verified_email: identity.verifiedEmail,
       p_invitation_kind: request.kind,
       p_invitation_id: request.invitationId,
     });
+    if (acknowledged.error) {
+      logOperationalFailure({ reference, surface: "invitation_delivery", code: "invitation_delivery_acknowledgement_failed" });
+    }
   }
   return outcome.kind;
 }

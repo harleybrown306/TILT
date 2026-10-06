@@ -2,20 +2,17 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createServerClient } from "@supabase/ssr";
 import { safeAuthContinuation } from "@/lib/auth-continuation";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 
-function continuationCategory(destination: string) {
-  if (destination.startsWith("/invite/") || destination.startsWith("/family-invite/") || destination.startsWith("/guardian-invite/") || destination.startsWith("/child-login-invite/")) return "invite";
-  if (destination === "/reset-password") return "reset";
-  return "root";
+function failureRedirect(origin: string, reference?: string) {
+  const destination = new URL("/login?auth=error", origin);
+  if (reference) destination.searchParams.set("reference", reference);
+  return NextResponse.redirect(destination);
 }
 
-function logExchangeError(error: unknown) {
-  const authError = error as { name?: unknown; code?: unknown; message?: unknown };
-  console.error("[TILT auth callback diagnostic]", {
-    errorName: typeof authError?.name === "string" ? authError.name : "UnknownError",
-    errorCode: typeof authError?.code === "string" ? authError.code : undefined,
-    errorMessage: typeof authError?.message === "string" ? authError.message : "Unknown error",
-  });
+function isExpectedExchangeRejection(error: unknown) {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" && status >= 400 && status < 500 && status !== 408;
 }
 
 export async function GET(request: Request) {
@@ -23,12 +20,8 @@ export async function GET(request: Request) {
   const code = url.searchParams.get("code");
   const flowId = url.searchParams.get("sb_flow_id");
   const destination = safeAuthContinuation(url.searchParams.get("next"));
-  console.info("[TILT auth callback diagnostic]", {
-    codePresent: Boolean(code),
-    flowIdPresent: Boolean(flowId),
-    continuation: continuationCategory(destination),
-  });
-  if (!code) return NextResponse.redirect(new URL("/login?auth=error", url.origin));
+  const reference = createOperationalReference();
+  if (!code) return failureRedirect(url.origin);
 
   const cookieStore = await cookies();
   const exchangedCookies: Array<{ name: string; value: string; options: Parameters<typeof cookieStore.set>[2] }> = [];
@@ -44,25 +37,24 @@ export async function GET(request: Request) {
       },
     }
   );
-  console.info("[TILT auth callback diagnostic]", { exchangeAttempted: true });
   let data;
   let error;
   try {
     ({ data, error } = await supabase.auth.exchangeCodeForSession(code, flowId ? { flowId } : undefined));
-  } catch (exchangeError) {
-    logExchangeError(exchangeError);
-    throw exchangeError;
+  } catch {
+    logOperationalFailure({ reference, surface: "auth_callback", code: "auth_exchange_failed" });
+    return failureRedirect(url.origin, reference);
   }
   if (error) {
-    logExchangeError(error);
-    return NextResponse.redirect(new URL("/login?auth=error", url.origin));
+    if (isExpectedExchangeRejection(error)) return failureRedirect(url.origin);
+    logOperationalFailure({ reference, surface: "auth_callback", code: "auth_exchange_failed" });
+    return failureRedirect(url.origin, reference);
   }
   // auth-js preserves the recovery redirect type in the PKCE verifier and returns it
   // at runtime, although the current public result type omits this field.
   const redirectType = (data as typeof data & { redirectType?: string }).redirectType;
-  console.info("[TILT auth callback diagnostic]", { exchangeSucceeded: true, redirectType: redirectType ?? null });
   if (destination === "/reset-password" && redirectType !== "recovery") {
-    return NextResponse.redirect(new URL("/login?auth=error", url.origin));
+    return failureRedirect(url.origin);
   }
   const response = NextResponse.redirect(new URL(destination, url.origin));
   exchangedCookies.forEach(({ name, value, options }) => response.cookies.set(name, value, options));

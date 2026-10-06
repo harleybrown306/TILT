@@ -56,7 +56,7 @@ test("reject empty, unknown envelope, and oversized batch", () => {
 function setup(options = {}) {
   const rows = [], writes = [], sessionFilters = [];
   const client = {
-    auth: { getUser: async () => ({ data: { user: options.signedOut ? null : { id: id(10) } }, error: null }) },
+    auth: { getUser: async () => ({ data: { user: options.signedOut ? null : { id: id(10) } }, error: options.authError ?? null }) },
     from(table) {
       let payload, selector;
       const query = {
@@ -91,6 +91,7 @@ function setup(options = {}) {
   const route = load("src/app/api/workout-session-events/route.ts", {
     "@/lib/supabase/server": { createClient: async () => client },
     "@/lib/workout-session-events": logic,
+    "@/lib/operational-log": { createOperationalReference: () => "00000000-0000-4000-8000-000000000010", logOperationalFailure: () => {} },
   });
   return { post: route.POST, rows, writes, sessionFilters };
 }
@@ -102,6 +103,11 @@ function request(payload = { events: [event()] }, headers = {}) {
 }
 test("unauthenticated denied without writes", async () => {
   const s = setup({ signedOut: true }); assert.equal((await s.post(request())).status, 401); assert.equal(s.writes.length, 0);
+});
+test("expected authentication rejection remains a denial, not a telemetry outage", async () => {
+  const response = await setup({ authError: { status: 401 } }).post(request());
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).reference, undefined);
 });
 test("valid batch accepts and strips nothing beyond canonical null normalization", async () => {
   const s = setup(); const response = await s.post(request());
