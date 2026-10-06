@@ -20,6 +20,7 @@ import {
 import { attendanceStatus, formatScheduledDate, localDate, shiftDate } from "@/lib/team-attendance";
 import { createClient } from "@/lib/supabase/server";
 import { loadMyFamilyAthleteContexts, resolveActiveAthleteContext } from "@/lib/my-athlete-contexts-server";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 
 type Team = { id: string; name: string };
 type Membership = {
@@ -213,8 +214,20 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
       .order("id", { ascending: true }) : Promise.resolve({ data: [], error: null }),
   ]);
 
-  if (membershipError) console.error("Unable to load memberships:", membershipError.message);
-  if (sessionError) console.error("Unable to load training sessions:", sessionError.message);
+  if (membershipError) {
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "dashboard_load",
+      code: "dashboard_membership_load_failed",
+    });
+  }
+  if (sessionError) {
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "dashboard_load",
+      code: "dashboard_session_load_failed",
+    });
+  }
 
   const teamMemberships = (memberships ?? []) as Membership[];
   const coachMemberships = teamMemberships.filter(

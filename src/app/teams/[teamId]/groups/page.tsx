@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 import { createGroup } from "./actions/create-group";
 
 type PageProps = {
@@ -77,7 +78,11 @@ export default async function TeamGroupsPage({
     .order("name", { ascending: true });
 
   if (groupError) {
-    console.error("Unable to load team groups:", groupError.message);
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "team_group_load",
+      code: "team_groups_load_failed",
+    });
   }
 
   const teamGroups = (groups ?? []) as TeamGroup[];

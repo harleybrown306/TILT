@@ -5,6 +5,7 @@ import {
   type AthleteAdherenceAttemptRow,
 } from "@/lib/athlete-exercise-adherence";
 import { calculateExerciseAdherence, type ExerciseAdherence } from "@/lib/exercise-adherence";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 import { createClient } from "@/lib/supabase/server";
 
 type PageProps = {
@@ -190,14 +191,19 @@ export default async function AthleteDetailPage({
   ] = await Promise.all([feedbackRequest, sessionRequest]);
 
   if (feedbackError) {
-    console.error("Unable to load athlete feedback:", feedbackError.message);
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "athlete_detail_load",
+      code: "athlete_feedback_load_failed",
+    });
   }
 
   if (sessionError) {
-    console.error(
-      "Unable to load athlete sessions:",
-      sessionError.message
-    );
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "athlete_detail_load",
+      code: "athlete_sessions_load_failed",
+    });
   }
 
   const athleteSessions: TrainingSessionWithAdherence[] = ((sessions ?? []) as TrainingSession[]).map((session) => {

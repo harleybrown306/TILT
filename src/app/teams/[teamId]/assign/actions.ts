@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 import { createClient } from "@/lib/supabase/server";
 import {
   isDate,
@@ -124,17 +125,21 @@ export async function assignTraining(
       p_athlete_ids: athleteIds,
     });
     if (assignmentError) {
-      console.error("Training assignment RPC failed", {
-        requestId,
-        teamId,
-        code: assignmentError.code,
+      logOperationalFailure({
+        reference: createOperationalReference(),
+        surface: "training_assignment",
+        code: "training_assignment_rpc_failed",
       });
       return rpcError(assignmentError.message);
     }
 
     const recipientCount = data?.[0]?.recipient_count;
     if (typeof recipientCount !== "number" || recipientCount !== athleteIds.length) {
-      console.error("Training assignment RPC returned an unexpected result", { requestId, teamId });
+      logOperationalFailure({
+        reference: createOperationalReference(),
+        surface: "training_assignment",
+        code: "training_assignment_result_invalid",
+      });
       return error("Unable to confirm the assignment. You can retry this same request; it will not create a second assignment.");
     }
 

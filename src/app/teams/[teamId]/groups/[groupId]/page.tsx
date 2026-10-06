@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 import {
   addAthleteToGroup,
   removeAthleteFromGroup,
@@ -75,10 +76,11 @@ export default async function TeamGroupPage({
   );
 
   if (athletesError) {
-    console.error(
-      "Unable to load team athletes:",
-      athletesError.message
-    );
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "team_group_detail_load",
+      code: "team_group_athletes_load_failed",
+    });
   }
 
   const { data: groupMemberships, error: groupMembershipError } =
@@ -88,10 +90,11 @@ export default async function TeamGroupPage({
       .eq("team_group_id", groupId);
 
   if (groupMembershipError) {
-    console.error(
-      "Unable to load group memberships:",
-      groupMembershipError.message
-    );
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "team_group_detail_load",
+      code: "team_group_memberships_load_failed",
+    });
   }
 
   const groupMemberIds = new Set(

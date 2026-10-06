@@ -4,10 +4,16 @@ import { createServerClient } from "@supabase/ssr";
 import { safeAuthContinuation } from "@/lib/auth-continuation";
 import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 
+function sensitiveAuthResponse(response: NextResponse) {
+  response.headers.set("Cache-Control", "private, no-store, max-age=0");
+  response.headers.set("Referrer-Policy", "no-referrer");
+  return response;
+}
+
 function failureRedirect(origin: string, reference?: string) {
   const destination = new URL("/login?auth=error", origin);
   if (reference) destination.searchParams.set("reference", reference);
-  return NextResponse.redirect(destination);
+  return sensitiveAuthResponse(NextResponse.redirect(destination));
 }
 
 function isExpectedExchangeRejection(error: unknown) {
@@ -67,5 +73,5 @@ export async function GET(request: Request) {
       secure: process.env.NODE_ENV === "production",
     });
   }
-  return response;
+  return sensitiveAuthResponse(response);
 }

@@ -9,6 +9,7 @@ import ChallengeSelection from "@/components/workout/challenge-selection";
 import { mapSessionPrescription, type SessionPrescriptionRow } from "@/lib/training-session-prescription";
 import { loadFamiliarExerciseIds } from "@/lib/athlete-exercise-familiarity-server";
 import { loadMyFamilyAthleteContexts } from "@/lib/my-athlete-contexts-server";
+import { createOperationalReference, logOperationalFailure } from "@/lib/operational-log";
 
 type PageProps = {
   params: Promise<{
@@ -160,10 +161,11 @@ export default async function TrainingSessionPage({
     .order("position", { ascending: true });
 
   if (stepsError) {
-    console.error(
-      "Unable to load workout exercises:",
-      stepsError.message
-    );
+    logOperationalFailure({
+      reference: createOperationalReference(),
+      surface: "training_session_load",
+      code: "training_session_exercises_load_failed",
+    });
   }
 
   const liveSteps = (steps ?? []) as WorkoutStep[];

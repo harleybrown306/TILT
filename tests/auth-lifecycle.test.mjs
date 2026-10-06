@@ -70,6 +70,7 @@ test("server action modules export only async functions", () => {
 
 function loadCallback({ redirectType, exchangedCookies = [], exchangeError = null }) {
   const setCookies = [];
+  const setHeaders = [];
   const exchangeCalls = [];
   const callback = load("src/app/auth/callback/route.ts", {
     "next/headers": { cookies: async () => ({ getAll: () => [{ name: "pkce", value: "verifier" }] }) },
@@ -83,20 +84,25 @@ function loadCallback({ redirectType, exchangedCookies = [], exchangeError = nul
         redirect: (url) => ({
           url: String(url),
           cookies: { set: (name, value, options) => setCookies.push({ name, value, options }) },
+          headers: { set: (name, value) => setHeaders.push({ name, value }) },
         }),
       },
     },
     "@/lib/auth-continuation": auth,
     "@/lib/operational-log": { createOperationalReference: () => "00000000-0000-4000-8000-000000000010", logOperationalFailure: () => {} },
   });
-  return { callback, setCookies, exchangeCalls };
+  return { callback, setCookies, setHeaders, exchangeCalls };
 }
 
-test("recovery callback returns Supabase session cookies and recovery intent together", async () => {
-  const { callback, setCookies } = loadCallback({ redirectType: "recovery", exchangedCookies: [{ name: "sb-session", value: "session", options: { httpOnly: true } }] });
+test("recovery callback returns Supabase session cookies, recovery intent, and protected redirects together", async () => {
+  const { callback, setCookies, setHeaders } = loadCallback({ redirectType: "recovery", exchangedCookies: [{ name: "sb-session", value: "session", options: { httpOnly: true } }] });
   const response = await callback.GET(new Request("https://tilt.test/auth/callback?code=fresh&next=/reset-password"));
   assert.equal(response.url, "https://tilt.test/reset-password");
   assert.deepEqual(setCookies.map(({ name }) => name), ["sb-session", "tilt_password_recovery"]);
+  assert.deepEqual(setHeaders, [
+    { name: "Cache-Control", value: "private, no-store, max-age=0" },
+    { name: "Referrer-Policy", value: "no-referrer" },
+  ]);
 });
 
 test("non-recovery callback cannot reach reset-password or set recovery intent", async () => {
