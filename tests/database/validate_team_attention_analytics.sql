@@ -6,6 +6,7 @@ DO $validation$
 DECLARE
   v_manager uuid;
   v_assistant uuid;
+  v_other_manager uuid;
   v_unrelated uuid;
   v_admin uuid;
   v_guardian uuid;
@@ -61,16 +62,17 @@ BEGIN
 
   INSERT INTO auth.users(id,aud,role,email,confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at)
   SELECT gen_random_uuid(),'authenticated','authenticated',v_marker || '-' || n || '@example.test',clock_timestamp(),'{}','{}',clock_timestamp(),clock_timestamp()
-  FROM generate_series(1,6) n;
+  FROM generate_series(1,7) n;
   SELECT id INTO v_manager FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-1@example.test');
   SELECT id INTO v_assistant FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-2@example.test');
-  SELECT id INTO v_unrelated FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-3@example.test');
+  SELECT id INTO v_other_manager FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-3@example.test');
   SELECT id INTO v_admin FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-4@example.test');
   SELECT id INTO v_guardian FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-5@example.test');
   SELECT id INTO v_self FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-6@example.test');
+  SELECT id INTO v_unrelated FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-7@example.test');
   UPDATE public.profiles SET platform_role='admin' WHERE id=v_admin;
   INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 team',v_manager) RETURNING id INTO v_team;
-  INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 other',v_manager) RETURNING id INTO v_other_team;
+  INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 other',v_other_manager) RETURNING id INTO v_other_team;
   INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 empty',v_manager) RETURNING id INTO v_empty_team;
   INSERT INTO public.team_memberships(team_id,user_id,role,created_by_user_id)
   VALUES (v_team,v_assistant,'assistant_coach',v_manager);
@@ -244,6 +246,15 @@ BEGIN
   PERFORM set_config('request.jwt.claim.sub',v_assistant::text,true);
   PERFORM count(*) FROM public.list_my_team_attention_sessions(v_team);
   PERFORM public.get_team_attention_as_of_date(v_team);
+  v_denied:=false; BEGIN PERFORM count(*) FROM public.list_my_team_attention_sessions(v_other_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '14B2 cross-team staff analytics actor was not denied'; END IF;
+  v_denied:=false; BEGIN PERFORM public.get_team_attention_as_of_date(v_other_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
+  IF NOT v_denied THEN RAISE EXCEPTION '14B2 cross-team staff read other-team anchor'; END IF;
+  PERFORM set_config('request.jwt.claim.sub',v_other_manager::text,true);
+  IF (SELECT count(*) FROM public.list_my_team_attention_sessions(v_other_team)) <> 0
+     OR public.get_team_attention_as_of_date(v_other_team) <> v_as_of THEN
+    RAISE EXCEPTION '14B2 other-team owner did not retain authorized analytics access';
+  END IF;
   PERFORM set_config('request.jwt.claim.sub',v_admin::text,true);
   PERFORM count(*) FROM public.list_my_team_attention_sessions(v_team);
   PERFORM public.get_team_attention_as_of_date(v_team);
@@ -256,7 +267,7 @@ BEGIN
   v_denied:=false; BEGIN PERFORM public.get_team_attention_as_of_date(v_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 unrelated actor read anchor'; END IF;
   v_denied:=false; BEGIN PERFORM public.get_team_attention_as_of_date(v_other_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
-  IF NOT v_denied THEN RAISE EXCEPTION '14B2 guessed unauthorized team anchor was not denied'; END IF;
+  IF NOT v_denied THEN RAISE EXCEPTION '14B2 unrelated actor read other-team anchor'; END IF;
   PERFORM set_config('request.jwt.claim.sub',v_guardian::text,true);
   v_denied:=false; BEGIN PERFORM count(*) FROM public.list_my_team_attention_sessions(v_team); EXCEPTION WHEN insufficient_privilege THEN v_denied:=true; END;
   IF NOT v_denied THEN RAISE EXCEPTION '14B2 guardian-only analytics actor was not denied'; END IF;

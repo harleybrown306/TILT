@@ -5,6 +5,7 @@ import test from "node:test";
 import { Client } from "pg";
 
 const sql = readFileSync(new URL("../supabase/migrations/20260929100000_create_session_challenge_foundation.sql", import.meta.url), "utf8");
+const phase18Sql = readFileSync(new URL("../supabase/migrations/20261004100000_enable_session_challenge_execution.sql", import.meta.url), "utf8");
 const validator = readFileSync(new URL("database/validate_session_challenge_foundation.sql", import.meta.url), "utf8");
 
 test("challenge snapshots are plan-item scoped and deletion safe", () => {
@@ -31,12 +32,13 @@ test("selection is self-only and locks after durable execution", () => {
   assert.doesNotMatch(selection, /p_workout_id|p_prescription|p_athlete_id/);
 });
 
-test("challenge execution and every completion transition fail closed before phase 18B", () => {
-  for (const text of ["selected_variant='challenge'", "Challenge execution is not available", "Challenge completion is not available", "reject_challenge_workout_session_event", "reject_challenge_workout_result", "workout_results_reject_challenge_completion", "reject_challenge_training_session_completion", "training_sessions_reject_challenge_completion", "BEFORE UPDATE OF status,completed_at ON public.training_sessions"]) assert.match(sql, new RegExp(text));
+test("Phase 18B permits canonical Challenge execution and gates completion", () => {
+  for (const text of ["private.register_workout_session_attempt_from_event", "private.performed_training_session_prescription", "Challenge completion requires a performed attempt", "private.arm_canonical_challenge_completion", "Challenge completion requires canonical execution", "workout_results_require_canonical_challenge_completion", "training_sessions_require_canonical_challenge_completion", "BEFORE UPDATE OF status,completed_at ON public.training_sessions"]) assert.match(phase18Sql, new RegExp(text));
+  assert.doesNotMatch(phase18Sql, /Challenge execution is not available|Challenge completion is not available/);
 });
 
 test("behavioral validator covers snapshot, selection, completion, and mutation denial", () => {
-  for (const text of ["profile/athlete split fixture failed", "cross-staff private challenge content was accepted", "assistant unexpectedly manages private coach plan", "owner challenge configuration failed", "owner challenge removal failed", "selected challenge accepted execution event", "selected challenge completed through canonical boundary", "assigned canonical completion failed", "completed session accepted challenge selection", "selected challenge completed through direct session status update", "selected challenge accepted direct completion timestamp", "assigned or unrelated direct session update failed", "directly completed assigned session accepted challenge selection", "assigned session direct completion timestamp failed", "timestamped assigned session accepted challenge selection", "selection audit/idempotency failed", "non-self selected challenge", "anon selected challenge", "direct challenge integrity mutation allowed", "ROLLBACK;"]) assert.match(validator, new RegExp(text));
+  for (const text of ["profile/athlete split fixture failed", "cross-staff private challenge content was accepted", "assistant unexpectedly manages private coach plan", "owner challenge configuration failed", "owner challenge removal failed", "Challenge attempt registration did not bind the selected snapshot", "unauthorized actor executed selected Challenge", "assigned-only execution event was accepted for Challenge", "Challenge attempt did not lock variant selection", "Challenge selection audit or idempotency failed", "selected challenge completed through canonical boundary", "assigned canonical completion failed", "completed session accepted challenge selection", "selected challenge completed through direct session status update", "selected challenge accepted direct completion timestamp", "assigned or unrelated direct session update failed", "directly completed assigned session accepted challenge selection", "assigned session direct completion timestamp failed", "timestamped assigned session accepted challenge selection", "non-self selected challenge", "anon selected challenge", "direct challenge integrity mutation allowed", "ROLLBACK;"]) assert.match(validator, new RegExp(text));
 });
 
 const concurrencyUrl = process.env.TILT_SESSION_CHALLENGE_CONCURRENCY_DATABASE_URL;
@@ -122,7 +124,9 @@ test("assignment generation serializes paired assigned and Challenge source chan
     const editorPid = (await editor.query("SELECT pg_backend_pid() AS id")).rows[0].id;
     await control.query("INSERT INTO auth.users(id,email) VALUES($1,$2),($3,$4)", [fixture.owner, `${fixture.plan}-owner@example.test`, fixture.athlete, `${fixture.plan}-athlete@example.test`]);
     await control.query("INSERT INTO public.teams(id,name,created_by_user_id) VALUES($1,'Paired source race',$2)", [fixture.team, fixture.owner]);
-    await control.query("INSERT INTO public.team_staff_memberships(team_id,profile_id,role,created_by_profile_id) VALUES($1,$2,'coach',$2)", [fixture.team, fixture.owner]);
+    const ownerMembership = await control.query("SELECT id FROM public.team_memberships WHERE team_id=$1 AND user_id=$2 AND role='coach'", [fixture.team, fixture.owner]);
+    assert.equal(ownerMembership.rowCount, 1, "team creation must create the authoritative owner membership");
+    assert.equal((await control.query("SELECT count(*)::int AS count FROM public.team_staff_memberships WHERE id=$1", [ownerMembership.rows[0].id])).rows[0].count, 1, "owner membership must be mirrored canonically");
     await control.query("INSERT INTO public.exercises(id,name) VALUES($1,'Paired source exercise')", [fixture.exercise]);
     for (const [workout, name] of [[fixture.assignedA, "Assigned A"], [fixture.assignedB, "Assigned B"], [fixture.challengeA, "Challenge A"], [fixture.challengeB, "Challenge B"]]) {
       await control.query("INSERT INTO public.workouts(id,name,visibility,owner_user_id) VALUES($1,$2,'private',$3)", [workout, name, fixture.owner]);
@@ -160,7 +164,7 @@ test("assignment generation serializes paired assigned and Challenge source chan
     await control.query("DELETE FROM public.training_plan_items WHERE id=$1", [fixture.item]); await control.query("DELETE FROM public.training_plans WHERE id=$1", [fixture.plan]);
     await control.query("DELETE FROM public.workout_exercises WHERE workout_id=ANY($1::uuid[])", [[fixture.assignedA, fixture.assignedB, fixture.challengeA, fixture.challengeB]]);
     await control.query("DELETE FROM public.workouts WHERE id=ANY($1::uuid[])", [[fixture.assignedA, fixture.assignedB, fixture.challengeA, fixture.challengeB]]);
-    await control.query("DELETE FROM public.team_staff_memberships WHERE team_id=$1", [fixture.team]); await control.query("DELETE FROM public.teams WHERE id=$1", [fixture.team]); await control.query("DELETE FROM public.exercises WHERE id=$1", [fixture.exercise]);
+    await control.query("DELETE FROM public.teams WHERE id=$1", [fixture.team]); await control.query("DELETE FROM public.exercises WHERE id=$1", [fixture.exercise]);
     await Promise.allSettled([generator, editor, observer, control].map((client) => client.end()));
   }
 });
