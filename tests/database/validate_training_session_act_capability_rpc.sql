@@ -48,8 +48,8 @@ BEGIN
          (v_child,v_view_only,'guardian',false,true,v_guardian),
          (v_sibling_child,v_sibling,'guardian',true,true,v_sibling),
          (v_distinct_self_athlete,v_unrelated,'self',true,true,v_unrelated);
-  INSERT INTO public.team_staff_memberships(team_id,profile_id,role,created_by_profile_id)
-  VALUES (v_team,v_guardian,'coach',v_guardian),(v_team,v_coach,'coach',v_guardian),(v_team,v_assistant,'assistant_coach',v_guardian);
+  INSERT INTO public.team_memberships(team_id,user_id,role,created_by_user_id)
+  VALUES (v_team,v_coach,'coach',v_guardian),(v_team,v_assistant,'assistant_coach',v_guardian);
   INSERT INTO public.team_athlete_memberships(team_id,athlete_id,created_by_profile_id)
   VALUES (v_team,v_child,v_guardian);
   INSERT INTO public.training_sessions(athlete_id,athlete_user_id,coach_user_id,team_id,workout_id,scheduled_date,status)

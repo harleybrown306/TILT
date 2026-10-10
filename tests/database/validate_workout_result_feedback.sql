@@ -73,7 +73,8 @@ BEGIN
   UPDATE public.athlete_profile_relationships SET revoked_at = clock_timestamp()
   WHERE athlete_id = v_athlete AND profile_id = v_revoked;
   INSERT INTO public.teams(id, name, created_by_user_id) VALUES (v_team, v_marker || ' team', v_coach);
-  INSERT INTO public.team_staff_memberships(team_id, profile_id, role) VALUES (v_team, v_coach, 'coach'), (v_team, v_assistant, 'assistant_coach');
+  INSERT INTO public.team_memberships(team_id, user_id, role, created_by_user_id)
+  VALUES (v_team, v_assistant, 'assistant_coach', v_coach);
   INSERT INTO public.team_athlete_memberships(team_id, athlete_id) VALUES (v_team, v_athlete);
   INSERT INTO public.exercises(id, name) VALUES (v_exercise, v_marker || ' exercise');
   INSERT INTO public.workouts(id, name) VALUES (v_workout, v_marker || ' workout');

@@ -55,7 +55,6 @@ BEGIN
   INSERT INTO public.athlete_profile_relationships(athlete_id,profile_id,role,training_permission,manage_permission,revoked_at,created_by_profile_id) VALUES
     (v_athlete,v_revoked_guardian,'guardian',true,false,clock_timestamp() + interval '1 second',v_coach);
   INSERT INTO public.teams(id,name,created_by_user_id) VALUES(v_team,'Phase18B validator',v_coach);
-  INSERT INTO public.team_staff_memberships(team_id,profile_id,role,created_by_profile_id) VALUES(v_team,v_coach,'coach',v_coach);
   INSERT INTO public.team_athlete_memberships(team_id,athlete_id,created_by_profile_id) VALUES(v_team,v_athlete,v_coach),(v_team,v_assigned_athlete,v_coach);
   INSERT INTO public.exercises(id,name) VALUES(v_base_exercise,'Assigned only'),(v_challenge_exercise,'Challenge only');
   INSERT INTO public.workouts(id,name,visibility,owner_user_id) VALUES

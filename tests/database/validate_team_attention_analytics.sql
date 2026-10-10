@@ -70,9 +70,10 @@ BEGIN
   SELECT id INTO v_self FROM public.profiles WHERE id IN (SELECT id FROM auth.users WHERE email=v_marker || '-6@example.test');
   UPDATE public.profiles SET platform_role='admin' WHERE id=v_admin;
   INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 team',v_manager) RETURNING id INTO v_team;
-  INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 other',v_unrelated) RETURNING id INTO v_other_team;
+  INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 other',v_manager) RETURNING id INTO v_other_team;
   INSERT INTO public.teams(name,created_by_user_id) VALUES ('14B2 empty',v_manager) RETURNING id INTO v_empty_team;
-  INSERT INTO public.team_staff_memberships(team_id,profile_id,role,created_by_profile_id) VALUES (v_team,v_manager,'coach',v_manager),(v_team,v_assistant,'assistant_coach',v_manager),(v_empty_team,v_manager,'coach',v_manager);
+  INSERT INTO public.team_memberships(team_id,user_id,role,created_by_user_id)
+  VALUES (v_team,v_assistant,'assistant_coach',v_manager);
   INSERT INTO public.athletes(id,display_name,created_by_profile_id) VALUES (v_athlete,'Current 14B2',v_manager),(v_former,'Former 14B2',v_manager);
   INSERT INTO public.team_athlete_memberships(team_id,athlete_id,created_by_profile_id) VALUES (v_team,v_athlete,v_manager);
   INSERT INTO public.athlete_profile_relationships(athlete_id,profile_id,role,training_permission,manage_permission,created_by_profile_id)

@@ -26,9 +26,9 @@ BEGIN
   IF v_self IS NULL OR v_self=v_athlete THEN RAISE EXCEPTION 'profile/athlete split fixture failed'; END IF;
   INSERT INTO public.teams(id,name,created_by_user_id) VALUES(v_team,'Challenge validator',v_coach);
   -- Legacy team_memberships remains the authorization source for plan-item
-  -- RLS. The assistant is therefore genuinely able to target this item.
+  -- RLS and the canonical staff mirror. The assistant is therefore genuinely
+  -- able to target this item without directly constructing canonical staff.
   INSERT INTO public.team_memberships(team_id,user_id,role,created_by_user_id) VALUES(v_team,v_assistant,'assistant_coach',v_coach);
-  INSERT INTO public.team_staff_memberships(team_id,profile_id,role,created_by_profile_id) VALUES(v_team,v_coach,'coach',v_coach),(v_team,v_assistant,'coach',v_coach);
   INSERT INTO public.exercises(id,name) VALUES(gen_random_uuid(),'Base exercise'),(gen_random_uuid(),'Challenge exercise');
   INSERT INTO public.workouts(id,name,visibility,owner_user_id) VALUES(v_base,'Assigned validator','private',v_coach),(v_challenge,'Challenge validator','private',v_coach),(v_hidden,'Hidden validator','private',v_coach);
   INSERT INTO public.workout_exercises(id,workout_id,exercise_id,position,duration_seconds,rest_seconds,exercise_snapshot) VALUES

@@ -28,9 +28,9 @@ BEGIN
   END IF;
 
   INSERT INTO public.teams(id, name, created_by_user_id) VALUES (v_team_a, 'Feedback history A', v_coach), (v_team_b, 'Feedback history B', v_unrelated);
-  INSERT INTO public.team_staff_memberships(team_id, profile_id, role, created_by_profile_id) VALUES
-    (v_team_a, v_coach, 'coach', v_coach), (v_team_a, v_assistant, 'assistant_coach', v_coach),
-    (v_team_a, v_former_staff, 'coach', v_coach), (v_team_b, v_unrelated, 'coach', v_unrelated);
+  INSERT INTO public.team_memberships(team_id, user_id, role, created_by_user_id) VALUES
+    (v_team_a, v_assistant, 'assistant_coach', v_coach),
+    (v_team_a, v_former_staff, 'coach', v_coach);
   INSERT INTO public.athletes(id, display_name, graduation_year, created_by_profile_id) VALUES (v_other_athlete, 'Feedback history other athlete', 2030, v_coach);
   INSERT INTO public.team_athlete_memberships(team_id, athlete_id, created_by_profile_id) VALUES
     (v_team_a, v_athlete, v_coach), (v_team_b, v_other_athlete, v_unrelated);
@@ -72,7 +72,7 @@ BEGIN
     IF NOT v_denied THEN RAISE EXCEPTION 'requested athlete/team mismatch received staff feedback'; END IF;
   END LOOP;
 
-  DELETE FROM public.team_staff_memberships WHERE team_id = v_team_a AND profile_id = v_former_staff;
+  DELETE FROM public.team_memberships WHERE team_id = v_team_a AND user_id = v_former_staff;
   FOR v_actor IN SELECT id FROM (VALUES (v_former_staff), (v_unrelated), (v_guardian), (v_admin), (v_self_profile)) AS denied(id) LOOP
     v_denied := false; BEGIN
       PERFORM set_config('request.jwt.claim.sub', v_actor::text, true); EXECUTE 'SET LOCAL ROLE authenticated';
