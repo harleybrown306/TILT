@@ -177,20 +177,22 @@ BEGIN
      OR EXISTS(SELECT 1 FROM public.training_session_variant_selection_audit WHERE session_id=v_direct_timestamp_session)
      OR (SELECT completed_at FROM public.training_sessions WHERE id=v_direct_timestamp_session) IS NULL
   THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'timestamped assigned session accepted challenge selection'; END IF;
-  -- Use the production attempt-registration boundary.  A valid start event may
-  -- exist, but a Challenge selection must fail closed before Phase 18B.
-  v_denied:=false; BEGIN INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,phase,elapsed_ms,occurred_at) VALUES(gen_random_uuid(),v_session,v_attempt,0,'workout_started','ready',0,clock_timestamp()); EXCEPTION WHEN others THEN v_denied:=true; END;
-  IF NOT v_denied OR EXISTS(SELECT 1 FROM public.workout_session_events WHERE session_id=v_session AND attempt_id=v_attempt) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'selected challenge accepted execution event'; END IF;
-  v_denied:=false; BEGIN PERFORM public.register_my_workout_session_attempt(v_attempt,v_session); EXCEPTION WHEN others THEN v_denied:=true; END;
-  IF NOT v_denied THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'selected challenge registered through assigned attempt path'; END IF;
-  PERFORM public.select_my_training_session_variant(v_session,'assigned');
+  -- Phase 18B permits canonical Challenge execution only through the same
+  -- self-owned start-event and attempt-registration boundaries as Assigned.
   INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,phase,elapsed_ms,occurred_at) VALUES(gen_random_uuid(),v_session,v_attempt,0,'workout_started','ready',0,clock_timestamp());
   PERFORM public.register_my_workout_session_attempt(v_attempt,v_session);
-  IF NOT EXISTS(SELECT 1 FROM public.workout_session_attempts WHERE id=v_attempt AND training_session_id=v_session) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'assigned attempt registration failed'; END IF;
-  v_denied:=false; BEGIN PERFORM public.select_my_training_session_variant(v_session,'challenge'); EXCEPTION WHEN others THEN v_denied:=true; END;
-  IF NOT v_denied THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'attempt did not lock variant selection'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.workout_session_attempts WHERE id=v_attempt AND training_session_id=v_session AND prescribed_work_ms=20000 AND prescribed_step_count=1) THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'Challenge attempt registration did not bind the selected snapshot'; END IF;
+  PERFORM set_config('request.jwt.claim.sub',v_unrelated::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
+  v_denied:=false; BEGIN INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,phase,elapsed_ms,occurred_at) VALUES(gen_random_uuid(),v_session,v_attempt,1,'timer_paused','work',0,clock_timestamp()); EXCEPTION WHEN others THEN v_denied:=true; END;
+  EXECUTE 'RESET ROLE';
+  IF NOT v_denied THEN RAISE EXCEPTION 'unauthorized actor executed selected Challenge'; END IF;
+  PERFORM set_config('request.jwt.claim.sub',v_self::text,true); EXECUTE 'SET LOCAL ROLE authenticated';
+  v_denied:=false; BEGIN INSERT INTO public.workout_session_events(id,session_id,attempt_id,sequence,event_type,workout_exercise_id,step_position,phase,phase_duration_ms,phase_elapsed_ms,elapsed_ms,occurred_at) VALUES(gen_random_uuid(),v_session,v_attempt,1,'exercise_started',v_base_step,0,'work',10000,0,0,clock_timestamp()); EXCEPTION WHEN others THEN v_denied:=true; END;
+  IF NOT v_denied THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'assigned-only execution event was accepted for Challenge'; END IF;
+  v_denied:=false; BEGIN PERFORM public.select_my_training_session_variant(v_session,'assigned'); EXCEPTION WHEN others THEN IF SQLERRM<>'Challenge selection is locked after workout start' THEN RAISE; END IF; v_denied:=true; END;
+  IF NOT v_denied THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'Challenge attempt did not lock variant selection'; END IF;
   SELECT count(*) INTO v_audit_count FROM public.training_session_variant_selection_audit WHERE session_id=v_session;
-  IF v_audit_count<>2 OR (SELECT selected_variant FROM public.training_session_performed_variants WHERE session_id=v_session)<>'assigned' THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'selection audit/idempotency failed'; END IF;
+  IF v_audit_count<>1 OR (SELECT selected_variant FROM public.training_session_performed_variants WHERE session_id=v_session)<>'challenge' THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'Challenge selection audit or idempotency failed'; END IF;
   v_denied:=false; BEGIN PERFORM public.select_my_training_session_variant(v_plain_session,'challenge'); EXCEPTION WHEN others THEN v_denied:=true; END; IF NOT v_denied THEN EXECUTE 'RESET ROLE'; RAISE EXCEPTION 'missing challenge accepted'; END IF;
   EXECUTE 'RESET ROLE';
   FOR v_self IN SELECT actor FROM (VALUES(v_guardian),(v_coach),(v_sibling_profile),(v_unrelated)) AS actors(actor) LOOP
