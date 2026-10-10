@@ -16,7 +16,7 @@ function loadTs(path, mocks = {}) {
   }).outputText;
   const loaded = { exports: {} };
   new vm.Script(`(function(require,module,exports){${source}\n})`).runInThisContext()(
-    (name) => name in mocks ? mocks[name] : require(name), loaded, loaded.exports,
+    (name) => name in mocks ? mocks[name] : name === "@/lib/operational-log" ? { createOperationalReference: () => "reference", logOperationalFailure: () => {} } : require(name), loaded, loaded.exports,
   );
   return loaded.exports;
 }

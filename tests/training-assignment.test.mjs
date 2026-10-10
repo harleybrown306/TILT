@@ -15,7 +15,7 @@ function loadTs(path, mocks = {}) {
   }).outputText;
   const loadedModule = { exports: {} };
   const run = new vm.Script(`(function(require,module,exports){${source}\n})`).runInThisContext();
-  run((name) => name in mocks ? mocks[name] : require(name), loadedModule, loadedModule.exports);
+  run((name) => name in mocks ? mocks[name] : name === "@/lib/operational-log" ? { createOperationalReference: () => "reference", logOperationalFailure: () => {} } : require(name), loadedModule, loadedModule.exports);
   return loadedModule.exports;
 }
 
@@ -95,6 +95,7 @@ function setup(options = {}) {
   const mocks = {
     "@/lib/supabase/server": { createClient: async () => client },
     "@/lib/training-assignment": helper,
+    "@/lib/operational-log": { createOperationalReference: () => "reference", logOperationalFailure: () => {} },
     "next/cache": { revalidatePath: (path) => revalidated.push(path) },
   };
   const source = ts.transpileModule(readFileSync(root + "src/app/teams/[teamId]/assign/actions.ts", "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2017, module: ts.ModuleKind.CommonJS } }).outputText;

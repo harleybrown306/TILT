@@ -40,6 +40,7 @@ function actionFixture({ reject = false } = {}) {
       familyInvitationPath(token) { return `/family-invite/${token}`; },
       normalizeFamilyInvitationEmail(value) { return String(value ?? "").trim().toLowerCase(); },
     },
+    "@/lib/invitation-delivery-boundary": { attemptCreatedInvitationDelivery: async () => "unavailable", deliveryRequestMessage: () => "" },
     "@/lib/team-roster-server": { requireRosterManager: async () => context },
   });
   return { actions, calls };

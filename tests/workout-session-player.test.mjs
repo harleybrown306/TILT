@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 const require = createRequire(import.meta.url);
 function load(path, mocks = {}) {
  const code = ts.transpileModule(readFileSync(new URL("../"+path,import.meta.url),"utf8"),{compilerOptions:{target:ts.ScriptTarget.ES2020,module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.ReactJSX}}).outputText;
- const loaded = {exports:{}}; new vm.Script(`(function(require,module,exports){${code}\n})`).runInThisContext()((name)=>name in mocks?mocks[name]:require(name),loaded,loaded.exports); return loaded.exports;
+ const loaded = {exports:{}}; new vm.Script(`(function(require,module,exports){${code}\n})`).runInThisContext()((name)=>name in mocks?mocks[name]:name==="@/lib/operational-log"?{createOperationalReference:()=>"reference",logOperationalFailure:()=>{}}:require(name),loaded,loaded.exports); return loaded.exports;
 }
 const state = load("src/lib/workout-session-state.ts");
 const completion = load("src/lib/complete-training-session.ts");

@@ -23,7 +23,7 @@ function loadPage(mocks) {
   }).outputText;
   const loaded = { exports: {} };
   const run = new vm.Script(`(function(require,module,exports){${source}\n})`).runInThisContext();
-  run((name) => name in mocks ? mocks[name] : require(name), loaded, loaded.exports);
+  run((name) => name in mocks ? mocks[name] : name === "@/lib/operational-log" ? { createOperationalReference: () => "reference", logOperationalFailure: () => {} } : require(name), loaded, loaded.exports);
   return loaded.exports.default;
 }
 

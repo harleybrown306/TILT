@@ -176,7 +176,8 @@ test("recipient implementation remains RPC-only, token-private, and dynamically 
     assert.doesNotMatch(source, /p_athlete_id|p_profile_id|p_email|profileId|athleteId/);
   }
   const config = readFileSync(root + "next.config.ts", "utf8");
-  assert.match(config, /source: "\/child-login-invite\/:path\*"/);
+  assert.match(config, /"\/child-login-invite\/:path\*"/);
+  assert.match(config, /\.map\(\(source\) => \(\{ source, headers: sensitiveInvitationResponseHeaders \}\)\)/);
   assert.match(config, /key: "Referrer-Policy", value: "no-referrer"/);
   assert.doesNotMatch(pageSource, /token_hash|<[^>]*>\{token\}/);
 });
