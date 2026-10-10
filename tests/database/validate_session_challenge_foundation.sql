@@ -78,14 +78,15 @@ BEGIN
   PERFORM public.select_my_training_session_variant(v_session,'challenge');
   PERFORM public.select_my_training_session_variant(v_session,'challenge');
   -- Canonical completion is the only ordinary result writer. A selected
-  -- Challenge must be rejected there, before a result or completion state is
-  -- durable. Assigned completion remains supported, and its durable result
-  -- must then lock further selection.
+  -- Challenge must be rejected before a compatible performed attempt and
+  -- before a result or completion state is durable. Assigned completion
+  -- remains supported, and its durable result must then lock further
+  -- selection.
   PERFORM public.select_my_training_session_variant(v_completion_challenge_session,'challenge');
   v_denied:=false; BEGIN
     PERFORM public.complete_my_training_session(v_completion_challenge_session);
   EXCEPTION WHEN others THEN
-    IF SQLERRM<>'Challenge completion is not available' THEN RAISE; END IF;
+    IF SQLERRM<>'Challenge completion requires a performed attempt' THEN RAISE; END IF;
     v_denied:=true;
   END;
   IF NOT v_denied
@@ -115,7 +116,7 @@ BEGIN
   v_denied:=false; BEGIN
     UPDATE public.training_sessions SET status='completed' WHERE id=v_direct_challenge_session;
   EXCEPTION WHEN others THEN
-    IF SQLERRM<>'Challenge completion is not available' THEN RAISE; END IF;
+    IF SQLERRM<>'Challenge completion requires canonical execution' THEN RAISE; END IF;
     v_denied:=true;
   END;
   EXECUTE 'RESET ROLE';
@@ -128,7 +129,7 @@ BEGIN
   v_denied:=false; BEGIN
     UPDATE public.training_sessions SET completed_at=clock_timestamp() WHERE id=v_direct_challenge_session;
   EXCEPTION WHEN others THEN
-    IF SQLERRM<>'Challenge completion is not available' THEN RAISE; END IF;
+    IF SQLERRM<>'Challenge completion requires canonical execution' THEN RAISE; END IF;
     v_denied:=true;
   END;
   EXECUTE 'RESET ROLE';
