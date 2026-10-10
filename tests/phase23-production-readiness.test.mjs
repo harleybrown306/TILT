@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 import vm from "node:vm";
@@ -10,6 +10,14 @@ const root = new URL("../", import.meta.url);
 
 function source(path) {
   return readFileSync(new URL(path, root), "utf8");
+}
+
+function appSourcePaths(directory = "src/app") {
+  return readdirSync(new URL(`${directory}/`, root), { withFileTypes: true }).flatMap((entry) => (
+    entry.isDirectory()
+      ? appSourcePaths(`${directory}/${entry.name}`)
+      : /\.(?:ts|tsx)$/.test(entry.name) ? [`${directory}/${entry.name}`] : []
+  ));
 }
 
 function load(path, mocks = {}) {
@@ -79,4 +87,25 @@ test("closed-beta team provisioning is enforced in UI, action, and database poli
 test("the disabled invitation transport exits safely before service-role use", () => {
   const boundary = source("src/lib/invitation-delivery-boundary.ts");
   assert.match(boundary, /mailer instanceof DisabledInvitationMailer\) return "unavailable"/);
+});
+
+test("service-role documentation covers every app-side invitation consumer", () => {
+  const appConsumers = appSourcePaths().filter((path) => source(path).includes("createServiceClient"));
+  assert.deepEqual(appConsumers.sort(), [
+    "src/app/child-login-invite/[token]/actions.ts",
+    "src/app/child-login-invite/[token]/page.tsx",
+    "src/app/family-invite/[token]/actions.ts",
+    "src/app/guardian-invite/[token]/actions.ts",
+    "src/app/guardian-invite/[token]/page.tsx",
+  ]);
+  for (const path of appConsumers) assert.match(source(path), /createServiceClient\(\)/);
+  assert.match(source("src/lib/invitation-delivery-boundary.ts"), /createServiceClient\(\)/);
+
+  const environment = source(".env.example");
+  const documentation = environment.replace(/\n#\s*/g, " ");
+  assert.match(documentation, /guardian invitation summary\/acceptance/);
+  assert.match(documentation, /child-login invitation summary\/acceptance/);
+  assert.match(documentation, /family-team invitation acceptance/);
+  assert.match(documentation, /enabled invitation-mail delivery/);
+  assert.match(documentation, /Never place this value in a NEXT_PUBLIC_ variable/);
 });
