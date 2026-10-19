@@ -65,29 +65,16 @@ function LoginForm() {
           />
 
           <div className="max-w-sm py-12 lg:py-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-white/55">
-              Training intelligence
-            </p>
-            <h2 className="mt-5 text-4xl font-semibold tracking-[-0.06em] sm:text-5xl lg:text-6xl">
-              Train with intent.
+            <h2 className="text-4xl font-semibold tracking-[-0.06em] sm:text-5xl lg:text-6xl">
+              Lock in. Show out.
             </h2>
-            <p className="mt-5 max-w-xs text-sm leading-6 text-white/65 sm:text-base">
-              Your work, progress, and team context—kept in one focused place.
-            </p>
           </div>
-
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-white/45">
-            Built for the work
-          </p>
         </section>
 
         <section className="px-7 py-9 sm:px-10 sm:py-12 lg:flex lg:flex-col lg:justify-center lg:px-14">
           <div className="mx-auto w-full max-w-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--tilt-muted)]">
-              Welcome back
-            </p>
-            <h1 className="mt-3 text-3xl font-semibold tracking-[-0.045em] text-[var(--tilt-ink)]">
-              Sign in to TILT
+            <h1 className="text-3xl font-semibold tracking-[-0.045em] text-[var(--tilt-ink)]">
+              Sign in
             </h1>
             <p className="mt-3 text-sm leading-6 text-[var(--tilt-muted)]">
               Invitation recipients must use the account associated with their invitation.
