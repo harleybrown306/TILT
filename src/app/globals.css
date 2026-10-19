@@ -1,8 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f5f5f1;
+  --foreground: #111110;
+  --tilt-paper: #f5f5f1;
+  --tilt-surface: #ffffff;
+  --tilt-ink: #111110;
+  --tilt-muted: #6d6d68;
+  --tilt-line: #d8d8d1;
+  --tilt-alert: #a63026;
 }
 
 @theme inline {
@@ -12,15 +18,31 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+}
+
+.tilt-sign-in {
+  background: var(--tilt-paper);
+}
+
+.tilt-sign-in__shell {
+  box-shadow: 0 24px 80px rgb(17 17 16 / 10%);
+}
+
+.tilt-sign-in__field {
+  border: 1px solid var(--tilt-line);
+  background: var(--tilt-surface);
+  color: var(--tilt-ink);
+}
+
+.tilt-sign-in__field::placeholder {
+  color: #9a9a93;
+}
+
+.tilt-sign-in__field:focus {
+  border-color: var(--tilt-ink);
+  box-shadow: 0 0 0 3px rgb(17 17 16 / 12%);
 }
