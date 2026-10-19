@@ -66,7 +66,9 @@ function LoginForm() {
 
           <div className="max-w-sm py-12 lg:py-0">
             <h2 className="text-4xl font-semibold tracking-[-0.06em] sm:text-5xl lg:text-6xl">
-              Lock in. Show out.
+              Lock in.
+              <br />
+              Show out.
             </h2>
           </div>
         </section>
