@@ -24,22 +24,29 @@ const family = load("src/lib/family-team-invitations.ts", { "@/lib/auth-continua
 const pageSource = readFileSync(root + "src/app/family-invite/[token]/page.tsx", "utf8");
 const actionsSource = readFileSync(root + "src/app/family-invite/[token]/actions.ts", "utf8");
 
-function fixture({ signedOut = false, summary = { team_name: "Thunder", expires_at: "2030-01-01T00:00:00Z", invitation_status: "pending" }, rpcError = false } = {}) {
+function fixture({ signedOut = false, unverified = false, summary = { team_name: "Thunder", expires_at: "2030-01-01T00:00:00Z", invitation_status: "pending" }, rpcError = false } = {}) {
   const calls = [];
-  const client = {
-    auth: { getUser: async () => ({ data: { user: signedOut ? null : { id: "recipient" } }, error: null }) },
+  const authClient = {
+    auth: { getUser: async () => ({ data: { user: signedOut ? null : { id: "recipient", email: "recipient@example.test", email_confirmed_at: unverified ? null : "2026-10-01T00:00:00Z" } }, error: null }) },
+  };
+  const serviceClient = {
     rpc: async (name, args) => {
       calls.push({ name, args });
       return rpcError ? { data: null, error: { message: "unavailable" } } : { data: summary ? [summary] : [], error: null };
     },
   };
+  const verifiedAuthIdentity = load("src/lib/verified-auth-identity.ts", {
+    "server-only": {}, "@/lib/supabase/server": { createClient: async () => authClient },
+  });
   const page = load("src/app/family-invite/[token]/page.tsx", {
     "next/navigation": { redirect: (destination) => { throw Error(`REDIRECT:${destination}`); } },
     "next/link": { default: (props) => React.createElement("a", props) },
     "@/components/roster-action-form": { default: ({ label }) => React.createElement("button", null, label) },
     "@/components/family-invitation-acceptance-form": { default: () => React.createElement("div", null, "Family athlete choices") },
     "@/lib/my-athlete-contexts-server": { loadMyFamilyAthleteContexts: async () => [] },
-    "@/lib/supabase/server": { createClient: async () => client },
+    "@/lib/supabase/server": { createClient: async () => authClient },
+    "@/lib/supabase/service": { createServiceClient: () => serviceClient },
+    "@/lib/verified-auth-identity": verifiedAuthIdentity,
     "@/lib/family-team-invitations": family,
     "./actions": { acceptFamilyTeamInvitation: async () => ({ status: "idle", message: "" }), switchFamilyInvitationAccount: async () => ({ status: "idle", message: "" }) },
   }).default;
@@ -63,7 +70,7 @@ for (const [status, expected] of [["pending", "Family athlete choices"], ["expir
     const { page, calls } = fixture({ summary: { team_name: "Thunder", expires_at: "2030-01-01T00:00:00Z", invitation_status: status } });
     const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token }) }));
     assert.ok(markup.includes(expected));
-    assert.deepEqual(calls, [{ name: "get_family_team_invitation_summary", args: { p_invitation_token: token } }]);
+    assert.deepEqual(calls, [{ name: "server_get_family_team_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
   });
 }
 
@@ -71,17 +78,35 @@ test("invalid or uncertain family summaries fail closed without acceptance", asy
   for (const options of [{ summary: null }, { rpcError: true }]) {
     const { page, calls } = fixture(options);
     const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token }) }));
-    assert.match(markup, /invalid or unavailable|could not load/i);
+    assert.match(markup, /invitation is unavailable/i);
     assert.equal(calls.length, 1);
   }
   const { page, calls } = fixture();
   const markup = renderToStaticMarkup(await page({ params: Promise.resolve({ token: "short" }) }));
-  assert.match(markup, /invalid or unavailable/i);
+  assert.match(markup, /invitation is unavailable/i);
   assert.deepEqual(calls, []);
 });
 
+test("wrong, unverified, and invalid recipients use one generic unavailable view without metadata", async () => {
+  const wrong = fixture({ summary: null });
+  const unverified = fixture({ unverified: true });
+  const invalid = fixture();
+  const wrongMarkup = renderToStaticMarkup(await wrong.page({ params: Promise.resolve({ token }) }));
+  const unverifiedMarkup = renderToStaticMarkup(await unverified.page({ params: Promise.resolve({ token }) }));
+  const invalidMarkup = renderToStaticMarkup(await invalid.page({ params: Promise.resolve({ token: "short" }) }));
+  for (const markup of [wrongMarkup, unverifiedMarkup, invalidMarkup]) {
+    assert.match(markup, /This invitation is unavailable/);
+    assert.doesNotMatch(markup, /Thunder|Expires|pending|accepted|revoked|expired/i);
+  }
+  assert.deepEqual(wrong.calls, [{ name: "server_get_family_team_invitation_summary", args: { p_auth_user_id: "recipient", p_verified_email: "recipient@example.test", p_invitation_token: token } }]);
+  assert.deepEqual(unverified.calls, []);
+  assert.deepEqual(invalid.calls, []);
+});
+
 test("recipient route keeps summary and manageable-family-context loading server-side", () => {
-  assert.match(pageSource, /get_family_team_invitation_summary/);
+  assert.match(pageSource, /server_get_family_team_invitation_summary/);
+  assert.match(pageSource, /getCurrentVerifiedAuthIdentity\(\)/);
+  assert.doesNotMatch(pageSource, /\.rpc\("get_family_team_invitation_summary"/);
   assert.doesNotMatch(pageSource, /\.from\(/);
   assert.match(pageSource, /loadMyFamilyAthleteContexts\(\)[\s\S]*filter\(\(context\) => context\.canManage\)/);
   assert.doesNotMatch(pageSource, /token_hash|localStorage|sessionStorage|indexedDB|telemetry/i);
@@ -92,6 +117,8 @@ test("recipient route keeps summary and manageable-family-context loading server
 
 test("legacy invitation route remains independent", () => {
   const legacy = readFileSync(root + "src/app/invite/[token]/page.tsx", "utf8");
-  assert.match(legacy, /get_team_invitation_summary/);
+  assert.match(legacy, /server_get_team_invitation_summary/);
+  assert.match(legacy, /getCurrentVerifiedAuthIdentity\(\)/);
+  assert.doesNotMatch(legacy, /\.rpc\("get_team_invitation_summary"/);
   assert.doesNotMatch(legacy, /get_family_team_invitation_summary|family-invite/);
 });

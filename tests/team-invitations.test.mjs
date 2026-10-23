@@ -51,7 +51,7 @@ function setup(options = {}) {
   };
   const client = {
     auth: {
-      getUser: async () => ({ data: { user: options.signedOut ? null : { id: userId, email: "manager@example.com" } }, error: null }),
+      getUser: async () => ({ data: { user: options.signedOut ? null : { id: userId, email: "manager@example.com", email_confirmed_at: options.unverified ? null : "2026-10-01T00:00:00Z" } }, error: null }),
       signOut: async () => { calls.push({ operation: "signout" }); return { error: null }; },
     },
     from(table) {
@@ -84,7 +84,7 @@ function setup(options = {}) {
     async rpc(name, args) {
       calls.push({ operation: "rpc", name, args });
       if (options.rpcThrows) throw Error("connection lost");
-      if (name === "get_team_invitation_summary") return { data: options.invalidToken ? [] : [{ team_name: "Team", invitation_role: options.acceptedRole ?? "athlete", invitation_status: options.summaryStatus ?? "pending", expires_at: options.expired ? "2020-01-01T00:00:00Z" : future() }], error: null, status: 200 };
+      if (name === "server_get_team_invitation_summary") return { data: options.invalidToken ? [] : [{ team_name: "Team", invitation_role: options.acceptedRole ?? "athlete", invitation_status: options.summaryStatus ?? "pending", expires_at: options.expired ? "2020-01-01T00:00:00Z" : future() }], error: null, status: 200 };
       if (options.rpcError) return { data: null, error: { message: options.rpcError }, status: options.rpcStatus ?? 400 };
       // Model the existing atomic RPC, preserving every other membership/history row.
       const result = { team_id: otherTeam, membership_id: id(40), membership_role: options.acceptedRole ?? "athlete" };
@@ -92,8 +92,11 @@ function setup(options = {}) {
       return { data: [result], error: null, status: 200 };
     },
   };
+  const verifiedAuthIdentity = loadTs("src/lib/verified-auth-identity.ts", {
+    "server-only": {}, "@/lib/supabase/server": { createClient: async () => client },
+  });
   const mocks = {
-    "server-only": {}, "@/lib/supabase/server": { createClient: async () => client }, "@/lib/training-assignment": assignment, "@/lib/team-invitations": logic,
+    "server-only": {}, "@/lib/supabase/server": { createClient: async () => client }, "@/lib/supabase/service": { createServiceClient: () => client }, "@/lib/verified-auth-identity": verifiedAuthIdentity, "@/lib/training-assignment": assignment, "@/lib/team-invitations": logic,
     "@/lib/family-team-invitations": { familyInvitationError: () => "Family invitation unavailable", familyInvitationPath: (raw) => `/family-invite/${raw}`, normalizeFamilyInvitationEmail: (value) => {
       if (typeof value !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) throw Error("Enter a valid email address.");
       return value.trim().toLowerCase();
@@ -239,6 +242,18 @@ for (const options of [{}, { expired: true }, { summaryStatus: "accepted" }, { s
     assert.ok(!markup.includes("athlete@example.com"));
   });
 }
+test("wrong or unverified legacy-invitation recipients see the same generic view without a direct summary RPC", async () => {
+  const wrong = setup({ invalidToken: true });
+  const unverified = setup({ unverified: true });
+  const wrongMarkup = renderToStaticMarkup(await invitePage(wrong));
+  const unverifiedMarkup = renderToStaticMarkup(await invitePage(unverified));
+  for (const markup of [wrongMarkup, unverifiedMarkup]) {
+    assert.match(markup, /This invitation is unavailable/);
+    assert.doesNotMatch(markup, /<h2[^>]*>Team<\/h2>|Expires|pending|accepted|revoked|expired/i);
+  }
+  assert.deepEqual(wrong.calls.filter((call) => call.operation === "rpc"), [{ operation: "rpc", name: "server_get_team_invitation_summary", args: { p_auth_user_id: userId, p_verified_email: "manager@example.com", p_invitation_token: token } }]);
+  assert.deepEqual(unverified.calls.filter((call) => call.operation === "rpc"), []);
+});
 test("expiration is inclusive and accepted/revoked tokens cannot be accepted", () => {
   const now = Date.now(); const summary = { invitation_role: "athlete", invitation_status: "pending", expires_at: new Date(now).toISOString() };
   assert.equal(logic.canAcceptInvitation(summary, now), false);

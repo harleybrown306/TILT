@@ -5,6 +5,8 @@ import FamilyInvitationAcceptanceForm from "@/components/family-invitation-accep
 import RosterActionForm from "@/components/roster-action-form";
 import { loadMyFamilyAthleteContexts } from "@/lib/my-athlete-contexts-server";
 import { createClient } from "@/lib/supabase/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentVerifiedAuthIdentity } from "@/lib/verified-auth-identity";
 import {
   familyInvitationLoginPath,
   familyInvitationStatus,
@@ -24,24 +26,29 @@ function unavailableMessage(status: ReturnType<typeof familyInvitationStatus>) {
 
 export default async function FamilyInvitationPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
-  if (!isFamilyInvitationToken(token)) return <UnavailableInvitation message="This invitation is invalid or unavailable." />;
+  if (!isFamilyInvitationToken(token)) return <UnavailableInvitation message="This invitation is unavailable." />;
 
   const supabase = await createClient();
   const { data: { user }, error: authError } = await supabase.auth.getUser();
   if (authError || !user) redirect(familyInvitationLoginPath(token));
+  const identity = await getCurrentVerifiedAuthIdentity();
+  if (!identity) return <UnavailableInvitation message="This invitation is unavailable." token={token} />;
 
   let summary: FamilyInvitationSummary | null = null;
-  let uncertain = false;
   try {
-    const { data, error } = await supabase.rpc("get_family_team_invitation_summary", { p_invitation_token: token });
-    if (error) uncertain = true;
-    else summary = (data?.[0] as FamilyInvitationSummary | undefined) ?? null;
+    const { data, error } = await createServiceClient().rpc("server_get_family_team_invitation_summary", {
+      p_auth_user_id: identity.authUserId,
+      p_verified_email: identity.verifiedEmail,
+      p_invitation_token: token,
+    });
+    if (!error) summary = (data?.[0] as FamilyInvitationSummary | undefined) ?? null;
   } catch {
-    uncertain = true;
+    summary = null;
   }
 
-  if (uncertain) return <UnavailableInvitation message="We could not load this invitation right now. Please try again." token={token} />;
-  if (!summary) return <UnavailableInvitation message="This invitation is invalid or unavailable." token={token} />;
+  // Invalid tokens, a recipient mismatch, and an unverified account all take
+  // this same no-row path, so no invitation lifecycle or team data is exposed.
+  if (!summary) return <UnavailableInvitation message="This invitation is unavailable." token={token} />;
   const status = familyInvitationStatus(summary);
   if (status !== "pending") return <UnavailableInvitation message={unavailableMessage(status)} token={token} />;
 
