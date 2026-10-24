@@ -5,7 +5,7 @@ import {
   athleteExerciseAdherenceInput,
   type AthleteAdherenceAttemptRow,
 } from "./athlete-exercise-adherence";
-import { readAllRows } from "./training-assignment";
+import { isUuid, readAllRows } from "./training-assignment";
 import type { AttendanceSession } from "./team-attendance";
 
 type Related<T> = T | T[] | null;
@@ -63,37 +63,59 @@ type AttentionRow = {
   adherence_prescribed_work_blocks: number | null;
 };
 
-function one<T>(value: Related<T>): T | null {
-  return Array.isArray(value) ? value[0] ?? null : value;
-}
+type Team = { id: string; name: string };
+type TeamMembership = { role: string };
+type Profile = { platform_role: string | null };
 
-export async function loadTeamAttendance(teamId: string) {
+/**
+ * Verifies access before any team-analytics RPC is invoked. Keeping this
+ * close to the server-side loaders prevents proxy/session-refresh behavior
+ * from becoming an authorization boundary.
+ */
+export async function requireTeamAnalyticsAccess(teamId: string) {
+  if (!isUuid(teamId)) notFound();
+
   const supabase = await createClient();
   const {
     data: { user },
+    error: userError,
   } = await supabase.auth.getUser();
-
-  if (!user) redirect("/login");
+  if (userError || !user) redirect("/login");
 
   const [
     { data: team, error: teamError },
-    { data: membership },
-    { data: profile },
+    { data: membership, error: membershipError },
+    { data: profile, error: profileError },
   ] = await Promise.all([
-    supabase.from("teams").select("id,name").eq("id", teamId).single(),
+    supabase.from("teams").select("id,name").eq("id", teamId).maybeSingle(),
     supabase
       .from("team_memberships")
       .select("role")
       .eq("team_id", teamId)
       .eq("user_id", user.id)
       .maybeSingle(),
-    supabase.from("profiles").select("platform_role").eq("id", user.id).single(),
+    supabase.from("profiles").select("platform_role").eq("id", user.id).maybeSingle(),
   ]);
 
-  if (teamError || !team) notFound();
+  if (teamError || membershipError || profileError) {
+    throw new Error("Unable to validate team analytics access.");
+  }
 
-  const isCoach = ["coach", "assistant_coach"].includes(membership?.role ?? "");
-  if (!isCoach && profile?.platform_role !== "admin") notFound();
+  const isTeamStaff = ["coach", "assistant_coach"].includes(
+    (membership as TeamMembership | null)?.role ?? "",
+  );
+  const isAdmin = (profile as Profile | null)?.platform_role === "admin";
+  if (!team || (!isTeamStaff && !isAdmin)) notFound();
+
+  return { supabase, team: team as Team, user };
+}
+
+function one<T>(value: Related<T>): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value;
+}
+
+export async function loadTeamAttendance(teamId: string) {
+  const { supabase, team, user } = await requireTeamAnalyticsAccess(teamId);
 
   const [{ data: rawAthletes, error: athleteError }, rawSessions] = await Promise.all([
     supabase.rpc("list_my_team_rostered_athlete_identities", { p_team_id: teamId }),
@@ -193,15 +215,12 @@ export async function loadTeamAttendance(teamId: string) {
  * loader above, this path never reads raw results or ACT-only attempts.
  */
 export async function loadTeamAttentionAttendance(teamId: string) {
-  const supabase = await createClient();
-  const [{ data: rawRows, error }, { data: team, error: teamError }] = await Promise.all([
-    supabase.rpc(
+  const { supabase, team } = await requireTeamAnalyticsAccess(teamId);
+  const { data: rawRows, error } = await supabase.rpc(
     "list_my_team_attention_sessions",
     { p_team_id: teamId },
-    ),
-    supabase.from("teams").select("id,name").eq("id", teamId).single(),
-  ]);
-  if (error || !rawRows || teamError || !team) throw new Error("Unable to load team attention analytics.");
+  );
+  if (error || !rawRows) throw new Error("Unable to load team attention analytics.");
 
   const rows = rawRows as AttentionRow[];
   let asOfDate: string;
