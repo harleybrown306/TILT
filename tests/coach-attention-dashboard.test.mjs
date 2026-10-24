@@ -9,12 +9,12 @@ test("team home derives attention from the bounded analytics loader before summa
   assert.match(page, /const today = asOfDate/);
   assert.match(page, /deriveCoachAttentionSignals\(\{ sessions, today \}\)/);
   assert.ok(page.indexOf('id="attention-heading"') < page.indexOf('aria-label="Team summary"'));
-  assert.ok(page.indexOf('id="attention-heading"') < page.indexOf("Roster"));
+  assert.ok(page.indexOf('id="attention-heading"') < page.indexOf('>Roster</p><h2'));
   assert.doesNotMatch(page, /team_memberships|athlete_user_id|createClient|service_role/);
 });
 
-test("team home presents bounded Last 30 days facts without raw attempt access", () => {
-  assert.match(page, /Last 30 days/);
+test("team home presents bounded last-30-days facts without raw attempt access", () => {
+  assert.match(page, /last 30 days/);
   assert.doesNotMatch(page, /workout_session_attempts|athlete_user_id|localDate\(new Date/);
 });
 
@@ -26,14 +26,14 @@ test("attention presents only approved factual evidence with restrained empty st
 
 test("attention offers schedule inspection and durable athlete detail only for current roster athletes", () => {
   assert.match(page, /schedule\?athlete=\$\{encodeURIComponent\(signal\.athleteId\)\}/);
-  assert.match(page, /View schedule for \{signal\.athleteName\}/);
+  assert.match(page, /View schedule<span className="sr-only"> for \{signal\.athleteName\}<\/span>/);
   assert.match(page, /currentAthleteIds\.has\(signal\.athleteId\)/);
-  assert.match(page, /View \{signal\.athleteName\}/);
+  assert.match(page, /View athlete<span className="sr-only"> \{signal\.athleteName\}<\/span>/);
 });
 
 test("attention is semantic and neutral for both positive and negative factual signals", () => {
   assert.match(page, /<section className="mb-10" aria-labelledby="attention-heading">/);
-  assert.match(page, /<ul className="mt-4 space-y-3">/);
+  assert.match(page, /<ul className="mt-5 space-y-3">/);
   assert.match(page, /border-slate-800 bg-slate-900/);
   assert.doesNotMatch(page, /border-(?:red|amber|yellow|rose)|bg-(?:red|amber|yellow|rose)/);
 });

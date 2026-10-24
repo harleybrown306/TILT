@@ -82,6 +82,12 @@ function setup(options = {}) {
     "next/navigation": { redirect: (path) => { throw Error(`REDIRECT:${path}`); }, notFound: () => { throw Error("404"); } },
     "next/link": { default: (props) => React.createElement("a", props) },
     "@/components/sign-out-button": { default: () => null },
+    "@/components/team-workspace": {
+      TeamWorkspaceHeader: ({ teamName }) => React.createElement("header", null, teamName),
+      TeamMetric: ({ label, value, detail }) => React.createElement("div", null, `${label}: ${value} ${detail}`),
+      TeamStatusPill: ({ children }) => React.createElement("span", null, children),
+      TeamToolGroup: ({ title, tools }) => React.createElement("section", null, title, tools.map((tool) => React.createElement("a", { key: tool.href, href: tool.href }, tool.label))),
+    },
     "@/lib/team-attendance": {
       localDate: () => "2026-09-14",
       shiftDate: (date) => date,
